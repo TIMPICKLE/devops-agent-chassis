@@ -13,11 +13,12 @@ authors = [{ name = "TIMPICKLE" }]
 keywords = ["agent", "devops", "orchestration", "mcp", "chassis"]
 
 # 底盘本体零依赖，只用标准库。
-# 接真实 MCP server 时再按需安装：pip install "agent-chassis[mcp]"
+# MCP Python SDK v2 需要 Python 3.10+；接真实 MCP server 时按需安装：
+#   pip install "agent-chassis[mcp]"
 dependencies = []
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.0"]
+mcp = ["mcp>=2.1,<3"]
 dev = ["pytest>=7"]
 
 [project.urls]
