@@ -8,7 +8,7 @@ LLM 的 tool loop。但拉任务、建 PR 这些阶段属于确定性编排，�
 确定性与不确定性的分离当场就塌了。所以连接器是独立可直接调用的，
 Agent 想用时再由编排器包装成工具暴露给它。
 
-内置三种 scheme，加新的只需注册一个类：
+内置四种 scheme，加新的只需注册一个类：
   mcp.stdio   本地进程型 MCP server
   mcp.http    Streamable HTTP 型 MCP server
   rest        普通 REST 接口
@@ -16,8 +16,13 @@ Agent 想用时再由编排器包装成工具暴露给它。
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 import time
+from concurrent.futures import Future
+from contextlib import asynccontextmanager
+from importlib.metadata import PackageNotFoundError, version as package_version
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 from ..contracts import Connector, Registry, ToolCall
@@ -157,14 +162,254 @@ class MockConnector(Connector):
         return self.handlers[tool](args)
 
 
+def _require_mcp_v2(connector_name: str) -> None:
+    """Require the stable v2 MCP SDK without making it a chassis core dependency."""
+    try:
+        import mcp  # noqa: F401
+        installed = package_version("mcp")
+    except (ImportError, PackageNotFoundError) as exc:  # pragma: no cover - 环境相关
+        raise RuntimeError(
+            f"连接器 {connector_name} 需要 MCP Python SDK v2："
+            'pip install "agent-chassis[mcp]"'
+        ) from exc
+
+    try:
+        parts = installed.split(".")
+        major = int(parts[0])
+        minor = int(parts[1])
+    except (ValueError, IndexError):  # pragma: no cover - 非标准版本字符串
+        major, minor = 0, 0
+    if major != 2 or minor < 1:
+        raise RuntimeError(
+            f"连接器 {connector_name} 需要 mcp>=2.1,<3，当前版本是 {installed}。"
+            '请执行 pip install -U "agent-chassis[mcp]"。'
+        )
+
+
+class _McpSyncRuntime:
+    """在同步 Connector API 后面维持一个真实的异步 MCP Client 生命周期。
+
+    Client context 的 enter / request / exit 全部在同一个 worker task 中执行。
+    这避免 AnyIO transport 的 task-local cancel scope 被跨 task 进入/退出，
+    同时不把整个 Chassis API 传染成 async。
+    """
+
+    _CLOSE = object()
+
+    def __init__(
+        self,
+        context_factory: Callable[[], Any],
+        *,
+        timeout: float,
+        label: str,
+    ) -> None:
+        self._context_factory = context_factory
+        self._timeout = float(timeout)
+        self._label = label
+        self._ready = threading.Event()
+        self._state_lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._queue: Optional[asyncio.Queue[Any]] = None
+        self._startup_error: Optional[BaseException] = None
+        self._fatal_error: Optional[BaseException] = None
+        self._closed = False
+
+    def start(self) -> None:
+        with self._state_lock:
+            if self._closed:
+                raise RuntimeError(f"MCP runtime {self._label} 已关闭")
+            if self._thread is None:
+                self._thread = threading.Thread(
+                    target=self._thread_main,
+                    name=f"agent-chassis-mcp-{self._label}",
+                    daemon=True,
+                )
+                self._thread.start()
+            thread = self._thread
+
+        if not self._ready.wait(self._timeout):
+            raise TimeoutError(
+                f"MCP 连接器 {self._label} 在 {self._timeout:g}s 内未完成连接"
+            )
+        if self._startup_error is not None:
+            raise RuntimeError(
+                f"MCP 连接器 {self._label} 建立连接失败: {self._startup_error}"
+            ) from self._startup_error
+        if thread is None or not thread.is_alive():
+            error = self._fatal_error or RuntimeError("MCP worker 启动后意外退出")
+            raise RuntimeError(
+                f"MCP 连接器 {self._label} 建立连接失败: {error}"
+            ) from error
+
+    def call(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        self.start()
+        with self._state_lock:
+            if self._closed:
+                raise RuntimeError(f"MCP runtime {self._label} 已关闭")
+            thread = self._thread
+            loop = self._loop
+            queue = self._queue
+            fatal = self._fatal_error
+
+        if fatal is not None:
+            raise RuntimeError(
+                f"MCP 连接器 {self._label} worker 已停止: {fatal}"
+            ) from fatal
+        if thread is None or not thread.is_alive() or loop is None or queue is None:
+            raise RuntimeError(f"MCP 连接器 {self._label} worker 未运行")
+        if threading.current_thread() is thread:
+            raise RuntimeError("MCP Connector 不能从自己的 worker thread 同步递归调用")
+
+        future: Future[Any] = Future()
+        loop.call_soon_threadsafe(
+            queue.put_nowait,
+            (method, args, kwargs, future),
+        )
+        try:
+            # MCP Client 自己有 read timeout；这里多留 5 秒给调度/清理。
+            return future.result(timeout=self._timeout + 5.0)
+        except TimeoutError as exc:
+            # concurrent.futures.TimeoutError 在现代 Python 中就是内置 TimeoutError；
+            # 若底层 MCP 调用自己抛 TimeoutError，future 已完成，必须保留原异常。
+            if future.done():
+                raise
+            raise TimeoutError(
+                f"MCP 连接器 {self._label} 请求 {method} 超过 {self._timeout:g}s"
+            ) from exc
+
+    def close(self) -> None:
+        with self._state_lock:
+            if self._closed:
+                return
+            self._closed = True
+            thread = self._thread
+            loop = self._loop
+            queue = self._queue
+
+        if thread is None:
+            return
+        if thread.is_alive() and loop is not None and queue is not None:
+            future: Future[Any] = Future()
+            try:
+                loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    (self._CLOSE, (), {}, future),
+                )
+                future.result(timeout=self._timeout + 5.0)
+            except Exception:
+                # close() 是清理路径，不用清理异常覆盖原业务异常。
+                pass
+        thread.join(timeout=self._timeout + 5.0)
+
+    def _thread_main(self) -> None:
+        try:
+            asyncio.run(self._serve())
+        except BaseException as exc:  # pragma: no cover - transport 崩溃路径
+            self._fatal_error = exc
+            if not self._ready.is_set():
+                self._startup_error = exc
+                self._ready.set()
+
+    async def _serve(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        self._queue = asyncio.Queue()
+        close_future: Optional[Future[Any]] = None
+        try:
+            async with self._context_factory() as client:
+                self._ready.set()
+                while True:
+                    method, args, kwargs, future = await self._queue.get()
+                    if method is self._CLOSE:
+                        close_future = future
+                        break
+                    try:
+                        result = await getattr(client, method)(*args, **kwargs)
+                    except BaseException as exc:
+                        if not future.done():
+                            future.set_exception(exc)
+                    else:
+                        if not future.done():
+                            future.set_result(result)
+        except BaseException as exc:
+            if not self._ready.is_set():
+                self._startup_error = exc
+                self._ready.set()
+            if close_future is not None and not close_future.done():
+                close_future.set_exception(exc)
+            raise
+        else:
+            if close_future is not None and not close_future.done():
+                close_future.set_result(None)
+
+
+def _tool_description(tool: Any) -> Dict[str, Any]:
+    out: Dict[str, Any] = {
+        "name": tool.name,
+        "description": getattr(tool, "description", None) or "",
+        "inputSchema": getattr(tool, "input_schema", None) or {},
+    }
+    title = getattr(tool, "title", None)
+    if title:
+        out["title"] = title
+    output_schema = getattr(tool, "output_schema", None)
+    if output_schema is not None:
+        out["outputSchema"] = output_schema
+    return out
+
+
+def _discover_mcp_tools(runtime: _McpSyncRuntime) -> Dict[str, Dict[str, Any]]:
+    """Fetch all tool pages so Connector.resolve sees the complete server inventory."""
+    discovered: Dict[str, Dict[str, Any]] = {}
+    cursor: Optional[str] = None
+    while True:
+        if cursor is None:
+            response = runtime.call("list_tools")
+        else:
+            response = runtime.call("list_tools", cursor=cursor)
+        for tool in response.tools:
+            discovered[tool.name] = _tool_description(tool)
+        cursor = getattr(response, "next_cursor", None)
+        if not cursor:
+            return discovered
+
+
+def _model_dump_json(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json", by_alias=True, exclude_none=True)
+    return value
+
+
+def _mcp_error_text(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return str(payload)
+    texts: List[str] = []
+    for block in payload.get("content", []) or []:
+        if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
+            texts.append(str(block["text"]))
+    return "; ".join(texts) or json.dumps(payload, ensure_ascii=False)
+
+
+def _invoke_mcp_tool(
+    runtime: _McpSyncRuntime,
+    tool: str,
+    args: Dict[str, Any],
+) -> Any:
+    result = runtime.call("call_tool", tool, args)
+    payload = _model_dump_json(result)
+    is_error = False
+    if isinstance(payload, dict):
+        is_error = bool(payload.get("isError", payload.get("is_error", False)))
+    else:
+        is_error = bool(getattr(result, "is_error", False))
+    if is_error:
+        raise RuntimeError(f"MCP tool {tool!r} 返回失败: {_mcp_error_text(payload)}")
+    return payload
+
+
 @connector_registry.register("mcp.stdio")
 class McpStdioConnector(Connector):
-    """本地进程型 MCP server。
-
-    真实实现走 mcp SDK 的 stdio_client。底盘只依赖 Connector 契约，
-    所以这里在缺少 SDK 时会明确报错而不是静默降级 —— 装配期就该失败，
-    而不是等到凌晨三点跑起来才失败。
-    """
+    """真实本地进程型 MCP server，使用官方 MCP Python SDK v2。"""
 
     scheme = "mcp.stdio"
 
@@ -174,53 +419,139 @@ class McpStdioConnector(Connector):
         command: str = "",
         args: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = None,
+        cwd: Optional[str] = None,
+        timeout: float = 30.0,
         **config: Any,
     ) -> None:
         super().__init__(name, **config)
         self.command = command
         self.args = list(args or [])
         self.env = dict(env or {})
-        self._session = None
+        self.cwd = cwd
+        self.timeout = float(timeout)
+        self._runtime: Optional[_McpSyncRuntime] = None
 
-    def _require_sdk(self) -> Any:
-        try:
-            import mcp  # noqa: F401
-        except ImportError as exc:  # pragma: no cover - 环境相关
-            raise RuntimeError(
-                f"连接器 {self.name} 需要 mcp SDK：pip install mcp"
-            ) from exc
-        return mcp
+    def _build_runtime(self) -> _McpSyncRuntime:
+        _require_mcp_v2(self.name)
+        if not self.command.strip():
+            raise ValueError(f"mcp.stdio 连接器 {self.name} 缺少 command")
 
-    def _discover(self) -> Dict[str, Dict[str, Any]]:  # pragma: no cover - 需真实 server
-        self._require_sdk()
-        raise NotImplementedError(
-            "示例仓库不内置真实 MCP 会话。生产实现见 SonarqubeAutoFlow_MAF/mcp_manager.py，"
-            "把 stdio_client + ClientSession 接进 _discover / _invoke 即可。"
+        @asynccontextmanager
+        async def client_context():
+            from mcp import Client, StdioServerParameters
+            from mcp.client.stdio import stdio_client
+
+            server = StdioServerParameters(
+                command=self.command,
+                args=self.args,
+                env=self.env or None,
+                cwd=self.cwd,
+            )
+            transport = stdio_client(server)
+            async with Client(
+                transport,
+                read_timeout_seconds=self.timeout,
+            ) as client:
+                yield client
+
+        return _McpSyncRuntime(
+            client_context,
+            timeout=self.timeout,
+            label=self.name,
         )
 
-    def _invoke(self, tool: str, args: Dict[str, Any]) -> Any:  # pragma: no cover
-        self._require_sdk()
-        raise NotImplementedError
+    def _get_runtime(self) -> _McpSyncRuntime:
+        if self._runtime is None:
+            self._runtime = self._build_runtime()
+        return self._runtime
+
+    def _discover(self) -> Dict[str, Dict[str, Any]]:
+        return _discover_mcp_tools(self._get_runtime())
+
+    def _invoke(self, tool: str, args: Dict[str, Any]) -> Any:
+        return _invoke_mcp_tool(self._get_runtime(), tool, args)
+
+    def close(self) -> None:
+        if self._runtime is not None:
+            self._runtime.close()
+            self._runtime = None
 
 
 @connector_registry.register("mcp.http")
 class McpHttpConnector(Connector):
-    """Streamable HTTP 型 MCP server。"""
+    """真实 Streamable HTTP MCP server，使用官方 MCP Python SDK v2。"""
 
     scheme = "mcp.http"
 
-    def __init__(self, name: str, url: str = "", headers: Optional[Dict[str, str]] = None, **config: Any) -> None:
+    def __init__(
+        self,
+        name: str,
+        url: str = "",
+        headers: Optional[Dict[str, str]] = None,
+        timeout: float = 30.0,
+        **config: Any,
+    ) -> None:
         super().__init__(name, **config)
         self.url = url
         self.headers = dict(headers or {})
+        self.timeout = float(timeout)
+        self._runtime: Optional[_McpSyncRuntime] = None
 
-    def _discover(self) -> Dict[str, Dict[str, Any]]:  # pragma: no cover
-        raise NotImplementedError(
-            "接上你的 MCP HTTP endpoint：POST {url}/tools/list 后填充本方法。"
+    def _build_runtime(self) -> _McpSyncRuntime:
+        _require_mcp_v2(self.name)
+        if not self.url.strip():
+            raise ValueError(f"mcp.http 连接器 {self.name} 缺少 url")
+
+        @asynccontextmanager
+        async def client_context():
+            from mcp import Client
+
+            if not self.headers:
+                async with Client(
+                    self.url,
+                    read_timeout_seconds=self.timeout,
+                ) as client:
+                    yield client
+                return
+
+            import httpx2
+            from mcp.client.streamable_http import streamable_http_client
+
+            async with httpx2.AsyncClient(
+                headers=self.headers,
+                timeout=self.timeout,
+            ) as http_client:
+                transport = streamable_http_client(
+                    self.url,
+                    http_client=http_client,
+                )
+                async with Client(
+                    transport,
+                    read_timeout_seconds=self.timeout,
+                ) as client:
+                    yield client
+
+        return _McpSyncRuntime(
+            client_context,
+            timeout=self.timeout,
+            label=self.name,
         )
 
-    def _invoke(self, tool: str, args: Dict[str, Any]) -> Any:  # pragma: no cover
-        raise NotImplementedError
+    def _get_runtime(self) -> _McpSyncRuntime:
+        if self._runtime is None:
+            self._runtime = self._build_runtime()
+        return self._runtime
+
+    def _discover(self) -> Dict[str, Dict[str, Any]]:
+        return _discover_mcp_tools(self._get_runtime())
+
+    def _invoke(self, tool: str, args: Dict[str, Any]) -> Any:
+        return _invoke_mcp_tool(self._get_runtime(), tool, args)
+
+    def close(self) -> None:
+        if self._runtime is not None:
+            self._runtime.close()
+            self._runtime = None
 
 
 @connector_registry.register("rest")
