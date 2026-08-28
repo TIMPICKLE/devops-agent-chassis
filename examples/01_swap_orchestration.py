@@ -28,8 +28,11 @@ from agent_chassis import Chassis, ConsoleObserver, InjectionPoint, borrowed_exe
 from agent_chassis.knowledge import SkillLibrary, SkillProvider, by_extension, by_filename_markers
 from agent_chassis.orchestration import (
     AgentStep,
+    BasicReflectionPattern,
     FnStep,
+    LLMCompilerPattern,
     NestedOrchestrator,
+    PlanAndSolvePattern,
     PlanExecutePattern,
     ReActPattern,
     ReWOOPattern,
@@ -45,8 +48,13 @@ from payloads.code_quality import (
     WorkspaceChangedCriteria,
     build_toolbox,
     make_critic,
+    make_dag_planner,
     make_decider,
+    make_evidence_planner,
+    make_joiner,
     make_planner,
+    make_reflector,
+    make_solver,
 )
 
 BAR = "─" * 74
@@ -232,8 +240,27 @@ def p_plan_execute(repo, box):
     return PlanExecutePattern(make_planner(), executor_tools=EXECUTOR_TOOLS)
 
 
+def p_plan_and_solve(repo, box):
+    return PlanAndSolvePattern(make_planner(), executor_tools=EXECUTOR_TOOLS)
+
+
 def p_rewoo(repo, box):
-    return ReWOOPattern(make_planner(), executor_tools=EXECUTOR_TOOLS)
+    return ReWOOPattern(make_evidence_planner(), solver=make_solver(),
+                        executor_tools=EXECUTOR_TOOLS)
+
+
+def p_llm_compiler(repo, box):
+    return LLMCompilerPattern(make_dag_planner(), joiner=make_joiner(repo),
+                              executor_tools=EXECUTOR_TOOLS)
+
+
+def p_basic_reflection(repo, box):
+    return BasicReflectionPattern(
+        inner=ReActPattern(make_decider(), max_iterations=8,
+                           executor_tools=EXECUTOR_TOOLS),
+        reflector=make_reflector(),
+        rounds=2,
+    )
 
 
 def p_reflexion(repo, box):
@@ -256,8 +283,11 @@ FLOWS = [
 ]
 PATTERNS = [
     ("ReAct", p_react),
-    ("Plan-Exec", p_plan_execute),
+    ("Plan-and-Execute", p_plan_execute),
+    ("Plan-and-Solve", p_plan_and_solve),
     ("ReWOO", p_rewoo),
+    ("LLMCompiler", p_llm_compiler),
+    ("Basic Reflection", p_basic_reflection),
     ("Reflexion", p_reflexion),
 ]
 
@@ -297,21 +327,44 @@ if __name__ == "__main__":
     print("第二部分 · 固定外层状态机，换内层 Agent 设计模式 —— 骨架没变，思考方式变了")
     print("═" * 74)
     run("内层① ReAct —— 边想边做，收敛点由模型判断", with_pattern(p_react))
-    run("内层② Plan-and-Execute —— 先出完整计划，计划可被审查", with_pattern(p_plan_execute))
-    run("内层③ ReWOO —— 一次规划，执行期间不再问模型", with_pattern(p_rewoo))
-    run("内层④ Reflexion(ReAct) —— 跑完自省，不满意带着教训重来", with_pattern(p_reflexion))
+    run("内层② Plan-and-Execute —— 计划显式，每步再问一次，失败可重规划",
+        with_pattern(p_plan_execute))
+    run("内层③ Plan-and-Solve —— 一次调用出计划即答案，执行期不再问",
+        with_pattern(p_plan_and_solve))
+    run("内层④ ReWOO —— 计划带 #E1 证据变量，执行后 Solver 汇总",
+        with_pattern(p_rewoo))
+    run("内层⑤ LLMCompiler —— 编译成带依赖的 DAG，无依赖节点并行成波次",
+        with_pattern(p_llm_compiler))
+    run("内层⑥ Basic Reflection —— 纯自评，看不到客观事实",
+        with_pattern(p_basic_reflection))
+    run("内层⑦ Reflexion —— 外部评估器判定，反思累积成情景记忆",
+        with_pattern(p_reflexion))
+
+    print(f"\n{BAR}")
+    print("补充 · LLMCompiler 与 ReWOO 的差别在串行长度，不在步数")
+    print(BAR)
+    hard = [t for t in ScannerTaskSource().fetch(4) if "S3776" in t.payload["rule"]][0]
+    linear = make_evidence_planner()(hard, None, None)
+    nodes = make_dag_planner()(hard, None, None)
+    waves = LLMCompilerPattern._waves(nodes)
+    print(f"  ReWOO       {len(linear)} 步线性：{' → '.join(t for t, _ in linear)}")
+    print(f"  LLMCompiler {len(nodes)} 个节点编译成 {len(waves)} 波：")
+    for i, w in enumerate(waves, 1):
+        print(f"                第 {i} 波  " + " | ".join(f"{n.id} {n.tool}" for n in w))
+    print("  节点更多，但串行长度更短。工具调用有真实延迟时，这是数量级的差别。")
 
     print(f"\n\n{'═' * 74}")
-    print("第三部分 · 3 × 4 全矩阵，每一格都真的跑了一遍")
+    print("第三部分 · 7 × 3 全矩阵，每一格都真的跑了一遍")
     print("═" * 74)
     print("格子里是两个任务合计的模型调用次数，越少越省 token。")
     print()
-    header = f"{'外层 \\ 内层':<16}" + "".join(f"{p:<13}" for p, _ in PATTERNS)
+    header = f"{'内层模式 \\ 外层流程':<22}" + "".join(f"{f:<14}" for f, _ in FLOWS)
     print(header)
-    print("─" * len(header))
-    for flow_name, flow_build in FLOWS:
-        cells = [probe(flow_build, mk) for _, mk in PATTERNS]
-        print(f"{flow_name:<14}" + "".join(f"{c:<13}" for c in cells))
+    print("─" * 62)
+    for pat_name, make_pattern in PATTERNS:
+        cells = [probe(flow_build, make_pattern) for _, flow_build in FLOWS]
+        pad = 20 - sum(2 if ord(c) > 127 else 1 for c in pat_name)
+        print(pat_name + " " * max(pad, 1) + "".join(f"{c:<14}" for c in cells))
 
     print(f"\n{BAR}")
     print("载荷代码一行没动。变的只有 with_orchestrator() 里的两个参数：")

@@ -6,10 +6,13 @@
     外层 · 流程编排 Flow（本模块）      内层 · 推理模式 Reasoning（reasoning.py）
     ├─ StateMachineOrchestrator        ├─ ReActPattern
     ├─ SubgraphOrchestrator            ├─ PlanExecutePattern
-    └─ SingleAgentOrchestrator         ├─ ReWOOPattern
+    └─ SingleAgentOrchestrator         ├─ PlanAndSolvePattern
+                                       ├─ ReWOOPattern
+                                       ├─ LLMCompilerPattern
+                                       ├─ BasicReflectionPattern
                                        └─ ReflexionPattern
-                    ↘            ↙
-                 NestedOrchestrator（组合算子）
+              ↘                    ↙
+              NestedOrchestrator（组合算子）
 
 外层决定任务被推进的骨架，内层决定模型在下放点内部怎么想。
 换外层不影响内层，换内层不影响外层。
@@ -36,12 +39,19 @@ from ..contracts import (
     Verdict,
 )
 from .reasoning import (
+    BasicReflectionPattern,
     Critic,
+    DagPlanner,
     Decide,
-    Planner,
+    Joiner,
+    LLMCompilerPattern,
+    PlanAndSolvePattern,
     PlanExecutePattern,
+    PlanNode,
+    Planner,
     ReActPattern,
     ReWOOPattern,
+    Reflector,
     ReflexionPattern,
     invoke_tool,
     reasoning_registry,
@@ -410,12 +420,19 @@ __all__ = [
     "ToolBox",
     "orchestrator_registry",
     # 内层：Agent 设计模式（转出，方便一处 import）
+    "BasicReflectionPattern",
     "Critic",
+    "DagPlanner",
     "Decide",
-    "Planner",
+    "Joiner",
+    "LLMCompilerPattern",
+    "PlanAndSolvePattern",
     "PlanExecutePattern",
+    "PlanNode",
+    "Planner",
     "ReActPattern",
     "ReWOOPattern",
+    "Reflector",
     "ReflexionPattern",
     "invoke_tool",
     "reasoning_registry",

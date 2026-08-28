@@ -41,8 +41,12 @@ from .knowledge import (
 )
 from .observability import ConsoleObserver, RecordingObserver
 from .orchestration import (
+    BasicReflectionPattern,
+    LLMCompilerPattern,
     NestedOrchestrator,
+    PlanAndSolvePattern,
     PlanExecutePattern,
+    PlanNode,
     ReActPattern,
     ReWOOPattern,
     ReflexionPattern,
@@ -57,6 +61,7 @@ from .permissions import PermissionBoundary, PermissionDenied, borrowed_executor
 __version__ = "0.1.0"
 
 __all__ = [
+    "BasicReflectionPattern",
     "Chassis",
     "ChassisError",
     "BuildReport",
@@ -69,13 +74,16 @@ __all__ = [
     "InjectionScheduler",
     "KnowledgeProvider",
     "Ledger",
+    "LLMCompilerPattern",
     "NestedOrchestrator",
     "Observer",
     "Orchestrator",
     "Outcome",
     "PermissionBoundary",
     "PermissionDenied",
+    "PlanAndSolvePattern",
     "PlanExecutePattern",
+    "PlanNode",
     "ReActPattern",
     "ReWOOPattern",
     "ReasoningPattern",

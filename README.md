@@ -60,10 +60,25 @@ python examples/05_permissions_and_failure.py  # 能力借来，权限不借
 
 | 模式 | 特征 | 代价 |
 |---|---|---|
-| `ReActPattern` | 边想边做，每步观察后重新决策，收敛点由模型判断 | 轮次不可预测 |
-| `PlanExecutePattern` | 先出完整计划再执行，**计划是显式产物**，可被人审查 | 计划基于前置判断，不看中间观察 |
-| `ReWOOPattern` | 一次规划出全部调用，执行期间不再问模型 | token 最省，但无法中途调整 |
-| `ReflexionPattern` | **装饰器**，包住其他任一模式，跑完自省，不满意带着教训重来 | 最贵 |
+| `ReActPattern` | 无计划，每步观察后重新决策，收敛点由模型判断 | 轮次不可预测 |
+| `PlanExecutePattern` | 计划是显式产物可被审查，**每步再问一次**，失败可重规划 | token 接近 ReAct |
+| `PlanAndSolvePattern` | **一次调用**出计划即答案，执行期不再问 | 无重规划，计划错了就错到底 |
+| `ReWOOPattern` | 计划带 `#E1` 证据变量表达依赖，执行后 Solver 汇总 | 固定两次调用，中途不能调整 |
+| `LLMCompilerPattern` | 编译成带依赖的 **DAG**，无依赖节点并行成波，Joiner 决定收工或重编译 | 规划器得能写对依赖 |
+| `BasicReflectionPattern` | **装饰器**：生成→自评→重生成，固定轮数，反思用完即弃 | 评价者就是模型自己 |
+| `ReflexionPattern` | **装饰器**：外部评估器判定，反思累积成情景记忆 | 最贵 |
+
+几组容易被混为一谈的差别，它们决定了这些为什么是独立的类：
+
+| 常被混淆的一对 | 真正的差别 |
+|---|---|
+| Plan-and-Execute vs Plan-and-Solve | 前者每步都再问一次模型且可重规划；后者全程只有一次调用 |
+| Plan-and-Solve vs ReWOO | ReWOO 多一个 Solver 汇总调用，且计划里带证据变量做依赖替换 |
+| ReWOO vs LLMCompiler | ReWOO 的计划是线性的；LLMCompiler 只要没有显式依赖就可同波执行 |
+| Basic Reflection vs Reflexion | 前者纯自评、反思用完即弃；后者由外部评估器判定、反思累积 |
+
+最后一行最要紧：Basic Reflection 的评价者读不到客观事实，所以它能修「取证不足」，
+修不了「根本没改成」—— 模型觉得自己做对了，它就会一直觉得自己做对了。
 
 底盘不替业务选哪一种，只保证能换。每个编排器通过 `delegation_points` 声明下放点，
 `reasoning_name` 声明内层模式，装配报告会把两者都打出来。
@@ -81,7 +96,21 @@ chassis.with_orchestrator(
 ```
 
 `examples/01` 分三部分证明两轴正交：固定内层换外层、固定外层换内层，
-最后把 3 × 4 全矩阵**真的各跑一遍**，打出每一格的模型调用次数。
+最后把 7 × 3 全矩阵**真的各跑一遍**，打出每一格的模型调用次数：
+
+```
+内层模式 \ 外层流程     线性状态机      单 Agent      分层子图
+ReAct                 10            10            10
+Plan-and-Execute      8             8             8
+Plan-and-Solve        2             2             2
+ReWOO                 4             4             4
+LLMCompiler           4             4             4
+Basic Reflection      12            12            12
+Reflexion             10            10            10
+```
+
+这张表里最值得看的是 Basic Reflection 的 12：它比裸 ReAct 多花了两次调用，
+却因为看不到客观事实而没改变任何结果。反思不是免费的。
 
 **关于工作流引擎**：线性五阶段只有一条主路径和一条失败短路，没有分支、并发、循环。
 这种形状引入引擎不产生收益，只多一层需要理解和调试的抽象。所以 `StateMachineOrchestrator`

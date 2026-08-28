@@ -14,6 +14,7 @@ from agent_chassis import (
     ChassisError,
     InjectionPoint,
     Outcome,
+    RunContext,
     borrowed_executor,
 )
 from agent_chassis.failure import Ledger, ZeroSideEffectPolicy
@@ -22,9 +23,13 @@ from agent_chassis.knowledge import SkillLibrary, SkillProvider, by_extension, b
 from agent_chassis.observability import RecordingObserver
 from agent_chassis.orchestration import (
     AgentStep,
+    BasicReflectionPattern,
     FnStep,
+    LLMCompilerPattern,
     NestedOrchestrator,
+    PlanAndSolvePattern,
     PlanExecutePattern,
+    PlanNode,
     ReActPattern,
     ReWOOPattern,
     ReflexionPattern,
@@ -39,8 +44,13 @@ from payloads.code_quality import (
     WorkspaceChangedCriteria,
     build_toolbox,
     make_critic,
+    make_dag_planner,
     make_decider,
+    make_evidence_planner,
+    make_joiner,
     make_planner,
+    make_reflector,
+    make_solver,
 )
 
 
@@ -144,13 +154,18 @@ def test_flows_are_interchangeable():
 # ═══════════════════════════════════════════════════════════
 
 def test_reasoning_patterns_are_interchangeable():
-    """外层一模一样，几种 Agent 设计模式都应跑成功。"""
+    """外层一模一样，五种非装饰器类 Agent 设计模式都应跑成功。"""
     patterns = {
         "ReAct": _react,
         "Plan-and-Execute": lambda: PlanExecutePattern(
             make_planner(), executor_tools=["apply_fix"]),
-        "ReWOO": lambda: ReWOOPattern(
+        "Plan-and-Solve": lambda: PlanAndSolvePattern(
             make_planner(), executor_tools=["apply_fix"]),
+        "ReWOO": lambda: ReWOOPattern(
+            make_evidence_planner(), solver=make_solver(),
+            executor_tools=["apply_fix"]),
+        "LLMCompiler": lambda: LLMCompilerPattern(
+            make_dag_planner(), executor_tools=["apply_fix"]),
     }
     for expected, factory in patterns.items():
         chassis, *_ = _make(_nested(factory))
@@ -159,19 +174,82 @@ def test_reasoning_patterns_are_interchangeable():
         assert expected in chassis.report().reasoning
 
 
-def test_reflexion_wraps_another_pattern():
-    """Reflexion 是装饰器，内层名字要能在报告里看到。"""
+def test_rewoo_resolves_evidence_variables():
+    """#E1 必须在执行器里被解掉，而不是当字面量传给工具。"""
     def factory(repo, box, criteria):
-        pattern = ReflexionPattern(
-            inner=ReActPattern(make_decider(), executor_tools=["apply_fix"]),
-            critic=make_critic(repo),
-        )
+        pattern = ReWOOPattern(make_evidence_planner(), solver=make_solver(),
+                               executor_tools=["apply_fix"])
         return NestedOrchestrator(_steps(repo, lambda t, c: None), box,
                                   pattern, "agent_fix", criteria)
 
-    chassis, *_ = _make(factory)
-    assert chassis.run_once().outcome is Outcome.SUCCEEDED
-    assert "Reflexion(ReAct)" in chassis.report().reasoning
+    chassis, _, rec, _ = _make(factory)
+    chassis.run_once()
+    fix = [c for c in rec.tool_calls if c.name == "apply_fix"][-1]
+    assert fix.args["note"] != "#E1", "证据变量没被替换"
+    assert isinstance(fix.args["note"], dict)
+
+
+def test_llm_compiler_parallelizes_independent_nodes():
+    """互不依赖的节点要落在同一波，否则它只是 ReWOO 的花哨说法。"""
+    nodes = [
+        PlanNode("$1", "a"),
+        PlanNode("$2", "b"),
+        PlanNode("$3", "c", deps=["$1"]),
+        PlanNode("$4", "d", deps=["$2", "$3"]),
+    ]
+    waves = LLMCompilerPattern._waves(nodes)
+    assert [sorted(n.id for n in w) for w in waves] == [["$1", "$2"], ["$3"], ["$4"]]
+
+
+def test_llm_compiler_rejects_cyclic_plan():
+    """有环就报错，不要静默降级成串行。"""
+    with pytest.raises(ValueError):
+        LLMCompilerPattern._waves([
+            PlanNode("$1", "a", deps=["$2"]),
+            PlanNode("$2", "b", deps=["$1"]),
+        ])
+
+
+def test_reflection_decorators_wrap_another_pattern():
+    """两个反思模式都是装饰器，内层名字要能在报告里看到。"""
+    cases = {
+        "Reflexion(ReAct)": lambda repo: ReflexionPattern(
+            inner=ReActPattern(make_decider(), executor_tools=["apply_fix"]),
+            critic=make_critic(repo)),
+        "Basic Reflection(ReAct)": lambda repo: BasicReflectionPattern(
+            inner=ReActPattern(make_decider(), executor_tools=["apply_fix"]),
+            reflector=make_reflector()),
+    }
+    for expected, make in cases.items():
+        def factory(repo, box, criteria, _make=make):
+            return NestedOrchestrator(_steps(repo, lambda t, c: None), box,
+                                      _make(repo), "agent_fix", criteria)
+        chassis, *_ = _make(factory)
+        assert chassis.run_once().outcome is Outcome.SUCCEEDED, expected
+        assert expected in chassis.report().reasoning
+
+
+def test_reflexion_accumulates_memory_basic_reflection_does_not():
+    """两种反思的分水岭：教训是否往后累积。"""
+    reflexion = ReflexionPattern(
+        inner=ReActPattern(make_decider()), critic=lambda t, c: "总是不行",
+        max_attempts=3)
+    basic = BasicReflectionPattern(
+        inner=ReActPattern(make_decider()), reflector=lambda t, c: "总是有意见",
+        rounds=3)
+
+    repo = FakeRepo()
+    box = build_toolbox(repo, borrowed_executor("x"))
+    task = ScannerTaskSource().fetch(1)[0]
+
+    ctx_a = RunContext(run_id="a")
+    reflexion.reason(task, ctx_a, box)
+    assert len(ctx_a.facts["reflections"]) == 3, "Reflexion 应累积历次反思"
+
+    ctx_b = RunContext(run_id="b")
+    basic.reason(task, ctx_b, box)
+    assert "reflections" not in ctx_b.facts
+    assert ctx_b.facts["reflection"] == "总是有意见", "Basic Reflection 只留最近一条"
 
 
 def test_two_axes_are_independent():

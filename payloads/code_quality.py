@@ -23,7 +23,7 @@ from agent_chassis import (
     TaskSource,
     Verdict,
 )
-from agent_chassis.orchestration import ToolBox
+from agent_chassis.orchestration import PlanNode, ToolBox
 from agent_chassis.permissions import PermissionBoundary, PermissionDenied
 
 
@@ -342,6 +342,113 @@ def make_critic(repo: FakeRepo, require_files: int = 1):
     return critic
 
 
+def make_reflector():
+    """返回一个 Reflector 函数，给 Basic Reflection 用。
+
+    关键在于它**只看得到模型自己产生的东西**（计划、调过的工具），
+    看不到 repo.diff() 这种客观事实。所以它能挑出「难题取证不足」，
+    却永远挑不出「根本没改成」—— 这就是它与 Reflexion 的天花板。
+    """
+
+    def reflector(task: Task, ctx: RunContext) -> Optional[str]:
+        seen = ctx.facts.get("tool_results", {})
+        hard = "S3776" in task.payload.get("rule", "")
+        if hard and "read_full_file" not in seen:
+            return "这是认知复杂度类问题，只读了片段就下手，应该先读完整文件"
+        return None
+
+    return reflector
+
+
+def make_solver():
+    """返回一个 Solver 函数，给 ReWOO 用。把证据汇总成一句结论。"""
+
+    def solver(task: Task, ctx: RunContext) -> None:
+        ev = ctx.facts.get("evidence", [])
+        ctx.note(f"[Solver] 汇总 {len(ev)} 条证据，结论：{task.key} 已按规范修复")
+
+    return solver
+
+
+def make_joiner(repo: FakeRepo):
+    """返回一个 Joiner 函数，给 LLMCompiler 用。
+
+    Joiner 与 Critic 的职责很像，位置不同：Critic 在整个模式之外，
+    Joiner 在模式内部，决定要不要重新编译一张新的 DAG。
+    """
+
+    def joiner(task: Task, ctx: RunContext) -> Optional[str]:
+        if repo.diff():
+            return None
+        return "DAG 跑完但工作区无变更，需重新编译"
+
+    return joiner
+
+
+# ═════════════════════════════════════════════════════════
+#  ⑥ 带证据变量与依赖图的规划器
+# ═════════════════════════════════════════════════════════
+
+def make_evidence_planner(deep_threshold: str = "high"):
+    """返回一个带 `#E1` 证据变量的 Planner，给 ReWOO 用。
+
+    与普通 Planner 的差别只有一处：步骤间的依赖写成了变量引用，
+    由执行器在运行时解。这是 ReWOO 能在不回喂观察的前提下
+    仍然表达「第三步要用第一步的结果」的原因。
+    """
+    table = {"S3776": "high", "S4487": "low", "S1854": "low", "S1192": "medium"}
+
+    def planner(task: Task, ctx: RunContext, box: ToolBox):
+        p = task.payload
+        rule = p.get("rule", "")
+        difficulty = next((v for k, v in table.items() if k in rule), "medium")
+
+        plan = [
+            ("analyze_smell_type", {"rule": rule, "message": p.get("message", "")}),
+            ("read_source", {"path": p["path"], "line": p["line"]}),
+        ]
+        if difficulty == deep_threshold:
+            plan.append(("read_full_file", {"path": p["path"]}))
+        # note 引用第一步的产出，而不是把结果回喂给模型再让它写一遍
+        plan.append(("apply_fix", {"path": p["path"], "note": "#E1"}))
+        return plan
+
+    return planner
+
+
+def make_dag_planner(deep_threshold: str = "high"):
+    """返回一个 DagPlanner，给 LLMCompiler 用。
+
+    关键不在于步骤更少，而在于**把真实的依赖关系写出来**：
+    判类型、读片段、读全文三件事互不相干，本来就能同时做。
+    线性计划会把它们排成三步，只是因为列表这种数据结构只会排队。
+    """
+    table = {"S3776": "high", "S4487": "low", "S1854": "low", "S1192": "medium"}
+
+    def planner(task: Task, ctx: RunContext, box: ToolBox):
+        p = task.payload
+        rule = p.get("rule", "")
+        difficulty = next((v for k, v in table.items() if k in rule), "medium")
+
+        nodes = [
+            PlanNode("$1", "analyze_smell_type",
+                     {"rule": rule, "message": p.get("message", "")}),
+            PlanNode("$2", "read_source", {"path": p["path"], "line": p["line"]}),
+        ]
+        deps = ["$1", "$2"]
+        if difficulty == deep_threshold:
+            nodes.append(PlanNode("$3", "read_full_file", {"path": p["path"]}))
+            nodes.append(PlanNode("$4", "analyze_complexity",
+                                  {"path": p["path"], "line": p["line"]},
+                                  deps=["$3"]))
+            deps.append("$4")
+        nodes.append(PlanNode("$9", "apply_fix",
+                              {"path": p["path"], "note": "$1"}, deps=deps))
+        return nodes
+
+    return planner
+
+
 __all__ = [
     "FakeRepo",
     "ScannerTaskSource",
@@ -349,6 +456,11 @@ __all__ = [
     "SMELLS",
     "build_toolbox",
     "make_critic",
+    "make_dag_planner",
     "make_decider",
+    "make_evidence_planner",
+    "make_joiner",
     "make_planner",
+    "make_reflector",
+    "make_solver",
 ]
