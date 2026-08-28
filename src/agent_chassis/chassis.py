@@ -220,7 +220,17 @@ class Chassis:
         try:
             self.workspace_guard.prepare(ctx)
             self.inject(InjectionPoint.TASK_ADMITTED, task, ctx)
-            result = self._orchestrator.run(task, ctx)
+
+            while True:
+                try:
+                    result = self._orchestrator.run(task, ctx)
+                    break
+                except Exception as exc:
+                    error = f"{type(exc).__name__}: {exc}"
+                    if self._prepare_retry(task, error, ctx):
+                        continue
+                    raise
+
             if result.outcome is Outcome.SUCCEEDED:
                 self._failure.remember(task.key, Outcome.SUCCEEDED)
             elif result.outcome is Outcome.FAILED:
@@ -236,6 +246,31 @@ class Chassis:
 
         self.observers.on_task_end(result, ctx)
         return result
+
+    def _prepare_retry(self, task: Task, error: str, ctx: RunContext) -> bool:
+        """若失败策略支持有限重试，准备下一次干净尝试。"""
+        should_retry = getattr(self._failure, "should_retry", None)
+        consume_retry = getattr(self._failure, "consume_retry", None)
+        if not callable(should_retry) or not callable(consume_retry):
+            return False
+        if not should_retry(ctx):
+            return False
+
+        on_retry = getattr(self._failure, "on_retry", None)
+        if callable(on_retry):
+            on_retry(task, error, ctx)
+        else:
+            ctx.facts["last_error"] = error
+        consume_retry(ctx)
+
+        # invoke_tool 的结果属于单次尝试；保留它会让 ReAct 在下一轮误判为
+        # 某些工具已经执行过。其他 facts（失败原因、反思记忆等）有意保留。
+        ctx.facts.pop("tool_results", None)
+
+        # 新尝试先恢复工作区，再把失败原因注入给下一轮推理。
+        self.workspace_guard.prepare(ctx)
+        self.inject(InjectionPoint.ON_RETRY, task, ctx)
+        return True
 
     # ── 供插件回调 ──────────────────────────────────────
     def inject(self, point: InjectionPoint, task: Task, ctx: RunContext) -> str:

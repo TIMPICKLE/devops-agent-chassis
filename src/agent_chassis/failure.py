@@ -124,7 +124,7 @@ class ZeroSideEffectPolicy(FailurePolicy):
     def register_cleanup(self, label: str, fn: Callable[[Task, RunContext], None]) -> None:
         self._cleanups.append((label, fn))
 
-    def on_failure(self, task: Task, error: str, ctx: RunContext) -> Outcome:
+    def _run_cleanups(self, task: Task, ctx: RunContext) -> List[str]:
         performed: List[str] = []
         for label, fn in reversed(self._cleanups):
             try:
@@ -133,6 +133,10 @@ class ZeroSideEffectPolicy(FailurePolicy):
             except Exception as exc:
                 performed.append(f"{label}(补偿失败: {exc})")
         ctx.facts["cleanups"] = performed
+        return performed
+
+    def on_failure(self, task: Task, error: str, ctx: RunContext) -> Outcome:
+        self._run_cleanups(task, ctx)
         ctx.facts["last_error"] = error
         self.remember(task.key, Outcome.FAILED, error)
         return Outcome.FAILED
@@ -164,6 +168,11 @@ class RetryThenGiveUpPolicy(ZeroSideEffectPolicy):
 
     def consume_retry(self, ctx: RunContext) -> None:
         ctx.facts["retries"] = int(ctx.facts.get("retries", 0)) + 1
+
+    def on_retry(self, task: Task, error: str, ctx: RunContext) -> None:
+        """重试前补偿本次失败，但不把任务写成最终失败。"""
+        self._run_cleanups(task, ctx)
+        ctx.facts["last_error"] = error
 
 
 @dataclass
