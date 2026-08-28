@@ -20,8 +20,9 @@
 from __future__ import annotations
 
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .contracts import (
     DoneCriteria,
@@ -107,6 +108,9 @@ class Chassis:
         self._source: Optional[TaskSource] = None
         self._criteria: Optional[DoneCriteria] = None
         self._built = False
+        self._active_run: ContextVar[Optional[Tuple[Task, RunContext]]] = ContextVar(
+            f"agent_chassis_active_run_{id(self)}", default=None
+        )
 
     # ── ① 编排契约 ──────────────────────────────────────
     def with_orchestrator(self, orchestrator: Orchestrator) -> "Chassis":
@@ -214,38 +218,42 @@ class Chassis:
 
     def _run_task(self, task: Task) -> TaskResult:
         ctx = RunContext(chassis=self)
-        started = time.time()
-        self.observers.on_task_start(task, ctx)
-
+        token = self._active_run.set((task, ctx))
         try:
-            self.workspace_guard.prepare(ctx)
-            self.inject(InjectionPoint.TASK_ADMITTED, task, ctx)
+            started = time.time()
+            self.observers.on_task_start(task, ctx)
 
-            while True:
-                try:
-                    result = self._orchestrator.run(task, ctx)
-                    break
-                except Exception as exc:
-                    error = f"{type(exc).__name__}: {exc}"
-                    if self._prepare_retry(task, error, ctx):
-                        continue
-                    raise
+            try:
+                self.workspace_guard.prepare(ctx)
+                self.inject(InjectionPoint.TASK_ADMITTED, task, ctx)
 
-            if result.outcome is Outcome.SUCCEEDED:
-                self._failure.remember(task.key, Outcome.SUCCEEDED)
-            elif result.outcome is Outcome.FAILED:
-                self._failure.remember(task.key, Outcome.FAILED, result.error)
-        except Exception as exc:
-            error = f"{type(exc).__name__}: {exc}"
-            outcome = self._failure.on_failure(task, error, ctx)
-            result = TaskResult(
-                task=task, outcome=outcome, error=error,
-                steps=list(ctx.steps), iterations=ctx.iterations,
-                elapsed_ms=int((time.time() - started) * 1000),
-            )
+                while True:
+                    try:
+                        result = self._orchestrator.run(task, ctx)
+                        break
+                    except Exception as exc:
+                        error = f"{type(exc).__name__}: {exc}"
+                        if self._prepare_retry(task, error, ctx):
+                            continue
+                        raise
 
-        self.observers.on_task_end(result, ctx)
-        return result
+                if result.outcome is Outcome.SUCCEEDED:
+                    self._failure.remember(task.key, Outcome.SUCCEEDED)
+                elif result.outcome is Outcome.FAILED:
+                    self._failure.remember(task.key, Outcome.FAILED, result.error)
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+                outcome = self._failure.on_failure(task, error, ctx)
+                result = TaskResult(
+                    task=task, outcome=outcome, error=error,
+                    steps=list(ctx.steps), iterations=ctx.iterations,
+                    elapsed_ms=int((time.time() - started) * 1000),
+                )
+
+            self.observers.on_task_end(result, ctx)
+            return result
+        finally:
+            self._active_run.reset(token)
 
     def _prepare_retry(self, task: Task, error: str, ctx: RunContext) -> bool:
         """若失败策略支持有限重试，准备下一次干净尝试。"""
@@ -289,8 +297,14 @@ class Chassis:
         self.observers.on_injection(inj, task, ctx)
 
     def _on_connector_call(self, call: ToolCall) -> None:
-        # 连接器调用发生在确定性阶段，此时没有 task 上下文，只记账不广播
-        pass
+        active = self._active_run.get()
+        if active is None:
+            # 装配期 discovery、任务源拉取、健康检查等没有 task/run 上下文；
+            # ConnectorManager 仍会自行记账，但不能伪造一个 run_id。
+            return
+        task, ctx = active
+        ctx.tool_calls.append(call)
+        self.notify_tool_call(call, task, ctx)
 
     def close(self) -> None:
         self.connectors.close()
