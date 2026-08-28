@@ -1,8 +1,8 @@
-# Agent Chassis
+# 🏗️ Agent Chassis
 
 **DevOps 数字员工工程底盘。**
 
-一台数字员工 = 底盘（与业务无关的五大系统）+ 载荷（与业务有关的两项定义）。
+🚗 一台数字员工 = 底盘（与业务无关的五大系统）+ 载荷（与业务有关的两项定义）。
 
 底盘回答的是任何 DevOps 数字员工都要回答的同一组问题：它可不可靠、怎么接外部系统、
 输出符不符合规范、失败了谁收拾、凭什么敢上生产。这五个问题与你做的是代码治理还是
@@ -12,17 +12,17 @@
 
 ```
 底盘 Chassis（本仓库）              载荷 Payload（业务方提供）
-├─ ① 编排契约  Orchestrator          ├─ TaskSource    任务从哪来
-│    └ 外层流程 + 内层 ReasoningPattern  └─ DoneCriteria  怎么算做完
-├─ ② 接入层    Connector                 + 领域工具集
-├─ ③ 知识注入  KnowledgeProvider
-├─ ④ 失败契约  FailurePolicy
-└─ ⑤ 可观测    Observer
+├─ ① 🧭 编排契约  Orchestrator       ├─ 📥 TaskSource    任务从哪来
+│    └ 外层流程 + 内层 ReasoningPattern  └─ ✅ DoneCriteria  怎么算做完
+├─ ② 🔌 接入层    Connector              + 🧰 领域工具集
+├─ ③ 📚 知识注入  KnowledgeProvider
+├─ ④ 🧹 失败契约  FailurePolicy
+└─ ⑤ 📊 可观测    Observer
 ```
 
 ---
 
-## 五分钟看懂
+## ⏱️ 五分钟看懂
 
 零依赖，Python 3.9+，直接跑：
 
@@ -36,7 +36,7 @@ python examples/05_permissions_and_failure.py  # 能力借来，权限不借
 
 ---
 
-## ① 编排契约：编排是两个正交的轴
+## 🧭 ① 编排契约：编排是两个正交的轴
 
 「编排形态」这个词经常把两件不同的事混在一起说。底盘把它们拆开：
 
@@ -47,7 +47,7 @@ python examples/05_permissions_and_failure.py  # 能力借来，权限不借
 
 两轴独立替换。同一个流程可以换推理模式，同一个推理模式可以放进不同流程。
 
-### 外层：流程编排
+### 🦴 外层：流程编排
 
 | 形态 | 说明 | 下放点 |
 |---|---|---|
@@ -56,7 +56,7 @@ python examples/05_permissions_and_failure.py  # 能力借来，权限不借
 | `SubgraphOrchestrator` | 分析子图 → 路由 → 修复支路 → 人工介入 → 交付子图 | 各支路里的 AgentStep |
 | `NestedOrchestrator` | **不是第三种形态，是两轴的组合算子**：外层骨架 + 指定阶段下放给内层模式 | 外层的一个阶段 |
 
-### 内层：Agent 设计模式
+### 🧠 内层：Agent 设计模式
 
 | 模式 | 特征 | 代价 |
 |---|---|---|
@@ -77,7 +77,7 @@ python examples/05_permissions_and_failure.py  # 能力借来，权限不借
 | ReWOO vs LLMCompiler | ReWOO 的计划是线性的；LLMCompiler 只要没有显式依赖就可同波执行 |
 | Basic Reflection vs Reflexion | 前者纯自评、反思用完即弃；后者由外部评估器判定、反思累积 |
 
-最后一行最要紧：Basic Reflection 的评价者读不到客观事实，所以它能修「取证不足」，
+⚠️ 最后一行最要紧：Basic Reflection 的评价者读不到客观事实，所以它能修「取证不足」，
 修不了「根本没改成」—— 模型觉得自己做对了，它就会一直觉得自己做对了。
 
 底盘不替业务选哪一种，只保证能换。每个编排器通过 `delegation_points` 声明下放点，
@@ -109,7 +109,7 @@ Basic Reflection      12            12            12
 Reflexion             10            10            10
 ```
 
-这张表里最值得看的是 Basic Reflection 的 12：它比裸 ReAct 多花了两次调用，
+💸 这张表里最值得看的是 Basic Reflection 的 12：它比裸 ReAct 多花了两次调用，
 却因为看不到客观事实而没改变任何结果。反思不是免费的。
 
 **关于工作流引擎**：线性五阶段只有一条主路径和一条失败短路，没有分支、并发、循环。
@@ -120,7 +120,7 @@ Reflexion 包 ReAct 换准确率。这是两轴分离带来的最直接的好处
 
 ---
 
-## ② 接入层：连接器是可插拔的
+## 🔌 ② 接入层：连接器是可插拔的
 
 大多数 Agent 框架把外部系统集成做成「给 Agent 用的工具」，调用要经过 LLM 的 tool loop。
 但拉任务、建 PR 这些阶段属于确定性编排，一旦过模型，确定性与不确定性的分离当场就塌。
@@ -153,9 +153,9 @@ mgr.call("scanner",
 
 ---
 
-## ③ 知识注入：时机是一等公民
+## 📚 ③ 知识注入：时机是一等公民
 
-**时机比内容更重要。**
+💡 **时机比内容更重要。**
 
 同一份 ABP 规范，注入在决策层的 system prompt 里，Agent 就变成了「懂 ABP 的 Agent」，
 换技术栈要改 Agent；注入在调用外部执行器之前的最后一步，Agent 始终是「不知道 ABP
@@ -194,12 +194,12 @@ SkillLibrary(root="skills", rules=[
 
 ---
 
-## ④ 失败契约：失败之后系统留下什么
+## 🧹 ④ 失败契约：失败之后系统留下什么
 
-默认要求是零副作用：落库标记、去重防重试、干净退出、不阻塞下一条。
+✅ 默认要求是零副作用：落库标记、去重防重试、干净退出、不阻塞下一条。
 被消耗的只有算力，不是人力。
 
-还有一个容易被忽略的对偶：**开工前的清理**。不只是失败后不留残骸，
+🧽 还有一个容易被忽略的对偶：**开工前的清理**。不只是失败后不留残骸，
 而是每轮开始前假设上一轮可能留了残骸并强行清理。长期无人值守必须这么假设。
 
 ```python
@@ -215,7 +215,7 @@ guard = WorkspaceGuard().add("reset --hard + clean -fd", reset_workspace)
 
 ---
 
-## ⑤ 可观测与问责：四张表，零业务概念
+## 📊 ⑤ 可观测与问责：四张表，零业务概念
 
 `task` / `trace` / `tool_call` / `health` 四张表里不出现任何场景专属概念。
 换载荷不需要改表结构 —— 这是「底盘与业务无关」在数据层的体现。
@@ -231,12 +231,12 @@ rec.snapshot()        # 喂给只读 API 或看板
 
 ---
 
-## 权限边界：能力借来，权限不借
+## 🔒 权限边界：能力借来，权限不借
 
 底盘允许集成任何第三方 Agent 作为执行器，但集成不等于全权委托。
 执行器通常自带完整的版本控制能力，底盘要做的是**在授予能力的同时收回权限**。
 
-这不是靠提示词里写一句「请不要 commit」实现的。提示词是软约束，模型可以不听。
+⛔ 这不是靠提示词里写一句「请不要 commit」实现的。提示词是软约束，模型可以不听。
 硬约束是执行器根本拿不到那个能力，调用会抛异常：
 
 ```python
@@ -254,7 +254,7 @@ def try_commit(message):
 
 ---
 
-## 装配一台数字员工
+## 🔧 装配一台数字员工
 
 ```python
 from agent_chassis import Chassis, ConsoleObserver, InjectionPoint, borrowed_executor
@@ -287,7 +287,7 @@ chassis.run_once()
 `build()` 会在装配期就检查完整性。缺编排器或缺载荷会立刻失败，
 而不是等到凌晨三点跑起来才失败。
 
-### 不想手写装配脚本？让 AI 助手装配
+### 🤖 不想手写装配脚本？让 AI 助手装配
 
 仓库内置了 agent 专用的装配 skill（[.claude/skills/assemble-digital-employee/](.claude/skills/assemble-digital-employee/SKILL.md)，
 入口见 [AGENTS.md](AGENTS.md)）。在 Claude Code / Copilot 等 AI 助手里说
@@ -308,7 +308,7 @@ chassis.run_once()
 
 ---
 
-## 目录结构
+## 🗂️ 目录结构
 
 ```
 src/agent_chassis/
@@ -331,7 +331,7 @@ examples/                 五个可直接运行的演示
 
 ---
 
-## 与生产实现的关系
+## 🏭 与生产实现的关系
 
 底盘的抽象来自两套已在生产运行的系统：
 
@@ -343,12 +343,12 @@ examples/                 五个可直接运行的演示
 本仓库把两者的共同部分提取为可插拔的框架，并补上了它们各自缺的那一半：
 前者有工具抽象但编排写死，后者有编排但工具直接绑死在 Agent 上。
 
-生产系统里这套底盘对应的载荷已累计执行 900 次以上，跨 3 个 BU、4 种语言，
+📈 生产系统里这套底盘对应的载荷已累计执行 900 次以上，跨 3 个 BU、4 种语言，
 零主干污染。相关数据与设计论证见参赛材料。
 
 ---
 
-## 状态
+## 🚧 状态
 
 早期版本。契约层已稳定，`mcp.stdio` 与 `mcp.http` 连接器留了接入点但未接真实 SDK
 （示例用 `mock` 跑通全链路）。欢迎按 `Connector` 契约补齐。
