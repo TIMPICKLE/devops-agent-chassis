@@ -16,3 +16,6 @@ state/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 内部参赛资料（含内网地址与内部文档，禁止推到公开仓库）
+UIH-AI-docs/
