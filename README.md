@@ -91,7 +91,7 @@ mgr.mount("tickets", "jira", project="DEV")
 mgr.call("scanner",
          preferred=["issues", "issues/search", "issues.search", "issues_search"],
          keywords=["issues"],
-         args={"project": "WebOIS"})
+         args={"project": "demo-service"})
 ```
 
 ---

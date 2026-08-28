@@ -101,7 +101,7 @@ section("4. 工具名容错解析：上游改名也能接上")
 result = mgr.call(
     "scanner",
     preferred=["issues", "issues/search", "issues.search", "issues_search"],
-    args={"project": "WebOIS", "status": "OPEN"},
+    args={"project": "demo-service", "status": "OPEN"},
     keywords=["issues"],
 )
 print(f"  候选四选一 → 命中 issues_search，返回 total={result['total']}")
