@@ -1,6 +1,6 @@
 ---
 name: assemble-digital-employee
-description: Use when 用户要基于本仓库（agent-chassis 工程底盘）装配、搭建、配置一台数字员工/DevOps Agent，包括：新建载荷（TaskSource/DoneCriteria/工具集）、选择编排形态（state_machine/nested/single_agent/subgraph）、选择推理模式（ReAct/Plan-and-Execute/Plan-and-Solve/ReWOO/LLMCompiler/Reflexion）、配置知识注入时机、失败契约、权限边界、LLM Provider/模型适配器，或把规则模拟换成真实 LLM。触发词：装配数字员工、搭建 Agent、新载荷、换编排、SubgraphOrchestrator、LLM Provider、模型接入、assemble、payload。
+description: Use when 用户要基于本仓库（agent-chassis 工程底盘）装配、搭建、配置一台数字员工/DevOps Agent，包括：新建载荷（TaskSource/DoneCriteria/工具集）、选择编排形态（state_machine/nested/single_agent/subgraph）、选择推理模式（ReAct/Plan-and-Execute/Plan-and-Solve/ReWOO/LLMCompiler/Reflexion）、配置知识注入时机、失败契约、权限边界、MCP Connector、LLM Provider/模型适配器，或把规则模拟换成真实 LLM。触发词：装配数字员工、搭建 Agent、新载荷、换编排、SubgraphOrchestrator、MCP Server、接 MCP、MCP 配置、LLM Provider、模型接入、assemble、payload。
 ---
 
 # 装配一台数字员工（agent 访谈式装配）
@@ -47,8 +47,9 @@ Demo/mock 时，才保留规则模拟 decider/planner；不要把规则模拟描
 6. **权限边界**：执行器授予哪些能力。默认只给 `repo.read` + `repo.write`；
    用户要授予不可逆能力（vcs.commit/push、pr.create、notify.send…）时必须提醒：
    生产上这些通常由确定性代码持有，不给执行器。
-7. **⑤ 可观测 + 运行**：ConsoleObserver / RecordingObserver(cron|webhook)、跑几轮、
-   连接器挂载（scheme：`mock` / `mcp.stdio` / `mcp.http` / `rest`）。
+7. **⑤ 可观测 + Connector / MCP**：ConsoleObserver / RecordingObserver(cron|webhook)、跑几轮、
+   连接器挂载（scheme：`mock` / `mcp.stdio` / `mcp.http` / `rest`）。用户给了 MCP Server 配置时，
+   直接按下方 MCP onboarding 解析并生成装配配置；已提供的字段不要重复追问。
 8. **⑥ LLM Provider / AI 执行器**：先扫描仓库现有模型客户端、Gateway、环境变量约定和
    Adapter，能复用就不另起一套；否则询问 provider 类型、model/deployment、base URL、
    鉴权环境变量名、tool/function calling 能力。**只问 Secret 的引用/环境变量名，不让用户
@@ -112,6 +113,83 @@ SubgraphOrchestrator(
 `AGENT_BOOT`（刻意留空，慎用）。
 注意：`executor_tools` 列表决定哪些工具触发 BEFORE_EXECUTOR 而非 BEFORE_TOOL，忘配则 Skill 注不进去。
 
+### MCP Connector onboarding
+
+用户说“接这个 MCP”、贴出 MCP JSON/配置片段、或给出 command/URL 时，**不要只记录需求**；
+要把它规范化成 Chassis 的 Connector 装配配置，并生成到业务装配层。
+
+#### 识别与补问
+
+先解析用户已经给出的字段，**已有字段不要重复询问**。再检查当前 Connector 构造签名，只补运行
+所必需且仍缺失的字段；不要凭经验生成底盘当前不支持的参数。
+
+- 含 `command`（可带 `args` / `env`）→ 默认识别为 `mcp.stdio`。
+- 含 `url` / endpoint（可带 `headers`）→ 默认识别为 `mcp.http`。
+- 常见 `mcpServers: {name: {...}}` 结构 → 每个 entry 独立挂载，entry key 默认作为 Connector 名。
+- 用户只说 MCP Server 名称但没给连接参数 → 询问 stdio 还是 HTTP，再只补对应必需字段。
+- 用户给了多台 Server → 全部规范化，不要求用户逐台重复描述同样的环境约定。
+
+`mcp.stdio` 当前装配字段以仓库实际构造签名为准，通常是 `command`、`args`、`env`；
+`mcp.http` 通常是 `url`、`headers`。生成前必须读当前 Connector 实现确认，不要假设接口永远不变。
+
+#### Secret 处理
+
+把用户提供的配置分成普通配置与 Secret。`token`、`api_key`、`authorization`、`password`、
+`secret`、cookie/credential 等敏感值不得原样写进生成代码、`.env.example`、日志或最终摘要。
+
+- 用户已经给了环境变量名/Secret Store 引用 → 原样复用引用。
+- 用户贴了真实 Secret 值 → 不回显；为它生成稳定的环境变量名（例如 `<SERVER>_TOKEN`），
+  代码改为 `os.environ[...]` 读取，并在 `.env.example` 只写占位值。
+- HTTP Authorization header 由运行时环境变量拼出，不把 Bearer Token 写死在源码。
+- `.env` / Secret 文件必须保持未提交；若仓库忽略规则不足，先补 `.gitignore` 再继续。
+
+#### 生成装配配置
+
+**MCP Server 配置属于装配层，不属于 Chassis Core。** 默认修改/生成 `generated/<名字>.py` 或项目
+现有 assembly/config 文件，通过 `.mount(...)` 接入；不要为了每个新 Server 修改
+`src/agent_chassis`、注册新的业务专属 Connector 类。
+
+stdio 示例形态（字段以用户实际配置为准）：
+
+```python
+.mount(
+    "sonarqube",
+    "mcp.stdio",
+    command="npx",
+    args=["-y", "<server-package>"],
+    env={
+        "SONAR_URL": os.environ["SONAR_URL"],
+        "SONAR_TOKEN": os.environ["SONAR_TOKEN"],
+    },
+)
+```
+
+HTTP 示例形态：
+
+```python
+.mount(
+    "workitems",
+    "mcp.http",
+    url=os.environ["WORKITEMS_MCP_URL"],
+    headers={"Authorization": f"Bearer {os.environ['WORKITEMS_MCP_TOKEN']}"},
+)
+```
+
+如果用户给的是其他客户端（Claude Code、Claude Desktop、Cursor、VS Code 等）的 MCP JSON，
+把语义映射到上述装配字段即可；不要要求用户先手工改写成 Chassis 专用格式。
+
+#### MCP 验证
+
+生成配置后按“能验证到哪一步就明确验证到哪一步”的原则：
+
+1. 离线检查 scheme 与字段能被当前 Connector 构造函数接受；
+2. 检查 Secret 已全部改成引用，`.env.example` 无真实凭据；
+3. Runtime Adapter 已实现且网络/进程条件允许时，执行 discovery / `inventory()`，确认能列出工具；
+4. 再选一个只读/无副作用工具做最小 smoke test；
+5. 若当前 `mcp.stdio` / `mcp.http` Runtime 仍抛 `NotImplementedError`，明确报告
+   “配置已生成，但 MCP transport 尚未实现，未完成 live 验证”，**不得声称已连接成功**；
+6. 除非用户明确要求实现 MCP transport，否则 onboarding 任务不要顺手修改 Chassis Core。
+
 ### LLM Provider / 推理适配器
 
 底盘保持 model-agnostic；模型 SDK、Endpoint、Secret 和 Provider-specific 解析逻辑只放在
@@ -170,6 +248,8 @@ Provider 不支持 native tool calling 时，使用严格 structured-output sche
 - 新载荷 → `payloads/<模块名>.py`，照 code_quality.py 的骨架：TaskSource、
   DoneCriteria、build_toolbox、make_decider/make_planner、make_critic（若用 Reflexion）。
   **生产模式的 reasoning callable 接真实 LLM/外部 Agent Adapter；Demo/mock 才用规则模拟 + TODO。**
+- MCP Connector 配置 → 根据用户提供的 MCP JSON/command/URL 生成 `.mount(...)`；敏感值改成
+  环境变量/Secret Store 引用，并同步 `.env.example`。不要为业务 Server 修改 Chassis Core。
 - LLM Adapter → 优先复用现有项目 Gateway/Adapter；没有则生成在业务/生成层（例如
   `generated/<名字>_llm.py` 或项目现有 integration 目录），不要修改 Chassis Core 来绑定厂商 SDK。
 - 配置模板 → 需要新增模型配置时生成/更新 `.env.example`（只写变量名和占位值），确认真实
@@ -188,12 +268,15 @@ Provider 不支持 native tool calling 时，使用严格 structured-output sche
 5. **不得提交 Secret。** 只把 API Key/Token 的环境变量名或 Secret Store 引用写进配置；
    `.env.example` 只能有占位值。
 6. 模型只能看到当前权限允许的工具；模型返回的工具名和参数必须通过 schema 校验后才能执行。
-7. Ledger 定义了 `__len__`，空账本是 falsy——判空用 `is None`，别写 `ledger or Ledger()`。
+7. MCP 配置必须写在装配层；用户已提供的 MCP 字段不要重复追问，Secret 不得原样落盘。
+8. MCP live 验证只有在 transport 真正可用且 discovery/smoke test 成功后才能标记“已连接”。
+9. Ledger 定义了 `__len__`，空账本是 falsy——判空用 `is None`，别写 `ledger or Ledger()`。
 
 ## 验证（不跑不算完成）
 
 先做离线验证（生产和 Demo 都必须）：
 
+- MCP 配置字段与当前 Connector 构造签名一致，所有 Secret 都已引用化；
 - reasoning callable 与当前 Pattern 签名匹配；
 - `box.schema()` 能正确转成 Provider tools / structured-output schema；
 - 未授权工具不会暴露给模型；
