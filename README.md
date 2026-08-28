@@ -312,6 +312,13 @@ python assemble.py
 规划类推理模式不会出现在菜单里；没有 critic 的载荷不会被问 Reflexion。
 向导与底盘一样零第三方依赖。
 
+CLI 向导是固定模板 + 变量替换，不含任何 LLM 调用，只覆盖菜单里的组合。
+**用 AI 助手（Claude Code / Copilot 等）装配时走另一条路**：仓库内置了
+agent 专用的装配 skill（[.claude/skills/assemble-digital-employee/](.claude/skills/assemble-digital-employee/SKILL.md)，
+入口见 [AGENTS.md](AGENTS.md)），由 agent 访谈式引导装配，覆盖 CLI 做不到的
+形态——SubgraphOrchestrator 多支路分流、LLMCompiler DAG 并行、
+按支路挂不同推理模式、人工介入点。
+
 ---
 
 ## 目录结构
