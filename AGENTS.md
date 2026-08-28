@@ -8,9 +8,8 @@
 
 按 [.claude/skills/assemble-digital-employee/SKILL.md](.claude/skills/assemble-digital-employee/SKILL.md)
 的访谈流程执行：逐组询问用户（载荷 → 编排 → 知识注入 → 失败契约 → 权限 → 可观测），
-生成载荷与装配脚本，然后**实际运行验证**。该 skill 覆盖 CLI 向导
-（`python assemble.py`）做不到的形态：SubgraphOrchestrator 多支路、
-LLMCompiler DAG、按支路挂不同推理模式、人工介入点。
+生成载荷与装配脚本，然后**实际运行验证**。全部形态都支持：
+SubgraphOrchestrator 多支路、LLMCompiler DAG、按支路挂不同推理模式、人工介入点。
 
 ## 硬约束（任何改动都不能破坏）
 
@@ -24,5 +23,4 @@ LLMCompiler DAG、按支路挂不同推理模式、人工介入点。
 ```bash
 python -m pytest tests/ -q      # 回归测试
 python examples/04_swap_payload.py   # 换载荷演示
-python assemble.py              # 人类自助的 CLI 装配向导（固定模板）
 ```

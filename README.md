@@ -287,37 +287,24 @@ chassis.run_once()
 `build()` 会在装配期就检查完整性。缺编排器或缺载荷会立刻失败，
 而不是等到凌晨三点跑起来才失败。
 
-### 不想手写装配脚本？用装配向导
+### 不想手写装配脚本？让 AI 助手装配
 
-```bash
-python assemble.py
-```
-
-按底盘五大系统的顺序逐步问答（回车即接受默认值）：
+仓库内置了 agent 专用的装配 skill（[.claude/skills/assemble-digital-employee/](.claude/skills/assemble-digital-employee/SKILL.md)，
+入口见 [AGENTS.md](AGENTS.md)）。在 Claude Code / Copilot 等 AI 助手里说
+「装配一台数字员工」，agent 会按五大系统的顺序逐组访谈：
 
 | 步骤 | 问什么 | 可选项 |
 |---|---|---|
-| 载荷 | 任务从哪来、怎么算做完 | code_quality / pr_mention / **生成新载荷骨架** |
-| ① 编排 | 外层流程 × 内层推理 | nested / state_machine / single_agent × ReAct / Plan-and-Execute / Plan-and-Solve / ReWOO，可再包一层 Reflexion |
-| ③ 知识注入 | 挂哪些 provider、什么时机 | SkillProvider / StaticKnowledge / RetryFeedback，6 个注入点带说明（选 AGENT_BOOT 会警告） |
+| 载荷 | 任务从哪来、怎么算做完 | 复用 code_quality / pr_mention，或生成新载荷 |
+| ① 编排 | 外层流程 × 内层推理 | nested / state_machine / single_agent / **subgraph 多支路** × ReAct / Plan-and-Execute / Plan-and-Solve / ReWOO / **LLMCompiler DAG**，可包 Basic Reflection / Reflexion |
+| ③ 知识注入 | 挂哪些 provider、什么时机 | SkillProvider / StaticKnowledge / RetryFeedback，6 个注入点（AGENT_BOOT 刻意留空） |
 | ④ 失败契约 | 失败后留下什么 | ZeroSideEffect / RetryThenGiveUp，账本可落盘 |
-| 权限边界 | 授予执行器哪些能力 | 9 项能力多选，选了不可逆能力会提醒 |
-| ⑤ 可观测 | 挂哪些观察者 | Console / Recording(cron/webhook) |
+| 权限边界 | 授予执行器哪些能力 | 默认只给 repo.read/repo.write，不可逆能力会被提醒 |
+| ⑤ 可观测 | 挂哪些观察者 | Console / Recording(cron/webhook)，另可挂载连接器 |
 
-确认后产出一份**可直接运行的装配脚本**到 `generated/`；选「生成新
-载荷骨架」还会生成 `payloads/<模块名>.py`——自带演示任务与外部系统
-替身，生成即可离线跑通，搜 `TODO` 逐段替换成真实业务逻辑。
-
-向导会根据载荷能力过滤选项：只有 decider 没有 planner 的载荷，
-规划类推理模式不会出现在菜单里；没有 critic 的载荷不会被问 Reflexion。
-向导与底盘一样零第三方依赖。
-
-CLI 向导是固定模板 + 变量替换，不含任何 LLM 调用，只覆盖菜单里的组合。
-**用 AI 助手（Claude Code / Copilot 等）装配时走另一条路**：仓库内置了
-agent 专用的装配 skill（[.claude/skills/assemble-digital-employee/](.claude/skills/assemble-digital-employee/SKILL.md)，
-入口见 [AGENTS.md](AGENTS.md)），由 agent 访谈式引导装配，覆盖 CLI 做不到的
-形态——SubgraphOrchestrator 多支路分流、LLMCompiler DAG 并行、
-按支路挂不同推理模式、人工介入点。
+访谈结束后 agent 生成载荷与装配脚本，并实际运行验证。因为是 agent
+在做而不是固定模板，SubgraphOrchestrator 的支路结构、按支路挂不同
+推理模式、人工介入点这类需要来回商量的形态也能装出来。
 
 ---
 
@@ -330,7 +317,6 @@ src/agent_chassis/
 ├── permissions.py        权限边界
 ├── failure.py            失败契约、去重账本、开工前清理
 ├── observability.py      四张通用表与两个观察者
-├── wizard.py             终端问答式装配向导（python assemble.py 启动）
 ├── orchestration/        外层流程编排
 │   └── reasoning.py      内层 Agent 设计模式
 ├── integration/          连接器与工具名容错解析

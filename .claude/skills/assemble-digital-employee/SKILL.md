@@ -10,10 +10,9 @@ description: Use when 用户要基于本仓库（agent-chassis 工程底盘）�
 本仓库是零依赖的 Python 工程底盘：**底盘五大系统一行不改，业务方只写载荷 + 装配脚本**。
 你（agent）的工作是：**逐组访谈用户 → 生成载荷与装配脚本 → 实际运行验证**。
 
-你比 `python assemble.py`（固定模板的 CLI 向导）能做的更多：CLI 向导只覆盖
-菜单里的固定组合；你可以和用户来回商量，装配出任意合法形态——包括
+不要把装配做成固定模板填空：和用户来回商量，装出任意合法形态——包括
 SubgraphOrchestrator 多支路分流、LLMCompiler DAG 并行、按支路挂不同推理模式、
-人工介入点等 CLI 覆盖不了的结构。
+人工介入点等需要根据业务量身设计的结构。
 
 ## 必读文件（按需，不要全读）
 
@@ -23,7 +22,6 @@ SubgraphOrchestrator 多支路分流、LLMCompiler DAG 并行、按支路挂不�
 | [payloads/code_quality.py](../../../payloads/code_quality.py) | 生成新载荷前读：TaskSource/DoneCriteria/ToolBox/decider/planner/critic 的范本 |
 | [examples/04_swap_payload.py](../../../examples/04_swap_payload.py) | 生成装配脚本前读：Chassis 链式接线 + 双载荷对照的范本 |
 | [examples/01_swap_orchestration.py](../../../examples/01_swap_orchestration.py) | 用户要 subgraph / llm_compiler / basic_reflection 时读：全部编排组合的构造配方 |
-| [src/agent_chassis/wizard.py](../../../src/agent_chassis/wizard.py) | 想抄现成代码模板时读：`gen_assembly` / `gen_payload_skeleton` 的字符串模板 |
 
 ## 访谈流程
 
@@ -73,7 +71,7 @@ SubgraphOrchestrator 多支路分流、LLMCompiler DAG 并行、按支路挂不�
 
 后两个是装饰器，包住前五个任意一个。
 
-### Subgraph 配方（CLI 向导不支持，你来做）
+### Subgraph 配方（需要和用户商量出结构）
 
 和用户商量清楚：分析阶段收集什么事实 → 路由函数按什么分流 → 每条支路
 挂什么模式 → 什么条件触发人工介入。骨架（完整版见 examples/01 的 `flow_subgraph`）：
