@@ -285,11 +285,70 @@ def make_decider(deep_threshold: str = "high"):
     return decide
 
 
+# ═══════════════════════════════════════════════════════════
+#  ⑤ 规划函数：模拟模型在 Plan-and-Execute / ReWOO 里的判断
+# ═══════════════════════════════════════════════════════════
+
+def make_planner(deep_threshold: str = "high"):
+    """返回一个 Planner 函数。
+
+    与 decide 的关键差别：**它一次性给出完整计划**，不看中间观察结果。
+    计划因此是显式产物，可以在执行前被人审查、被规则校验、被记账。
+
+    代价也很明显：难度是靠规则表推的，而不是靠真的读了一遍代码。
+    ReAct 是先看再判断，Plan 是先判断再看。哪个更合适取决于载荷，
+    不取决于底盘 —— 所以底盘只提供两种模式，不替业务选。
+    """
+    table = {"S3776": "high", "S4487": "low", "S1854": "low", "S1192": "medium"}
+
+    def planner(task: Task, ctx: RunContext, box: ToolBox):
+        p = task.payload
+        rule = p.get("rule", "")
+        difficulty = next((v for k, v in table.items() if k in rule), "medium")
+        ctx.facts["planned_difficulty"] = difficulty
+
+        plan = [
+            ("analyze_smell_type", {"rule": rule, "message": p.get("message", "")}),
+            ("read_source", {"path": p["path"], "line": p["line"]}),
+        ]
+        if difficulty == deep_threshold:
+            plan.append(("read_full_file", {"path": p["path"]}))
+            plan.append(("analyze_complexity", {"path": p["path"], "line": p["line"]}))
+
+        # 重规划时上一轮的错误已经通过 ON_RETRY 注入到 ctx，计划里加一次额外取证
+        if ctx.facts.get("last_error") and "search" not in ctx.facts.get("tool_results", {}):
+            plan.append(("search", {"pattern": p.get("message", "")[:20]}))
+
+        plan.append(("apply_fix", {"path": p["path"], "note": p.get("message", "")}))
+        return plan
+
+    return planner
+
+
+def make_critic(repo: FakeRepo, require_files: int = 1):
+    """返回一个 Critic 函数，给 Reflexion 用。
+
+    它检查的是**工作区里实际有没有变更**，不是模型说自己做完了没有。
+    与 WorkspaceChangedCriteria 同源：自省也必须基于事实，
+    否则 Reflexion 只是让模型多夸自己一遍。
+    """
+
+    def critic(task: Task, ctx: RunContext) -> Optional[str]:
+        changed = repo.diff()
+        if len(changed) >= require_files:
+            return None
+        return f"工作区只有 {len(changed)} 个文件变更，未达到 {require_files} 个，判定未生效"
+
+    return critic
+
+
 __all__ = [
     "FakeRepo",
     "ScannerTaskSource",
     "WorkspaceChangedCriteria",
     "SMELLS",
     "build_toolbox",
+    "make_critic",
     "make_decider",
+    "make_planner",
 ]

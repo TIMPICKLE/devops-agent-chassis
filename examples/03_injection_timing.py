@@ -32,7 +32,7 @@ from agent_chassis.knowledge import (
     by_extension,
     by_filename_markers,
 )
-from agent_chassis.orchestration import AgentStep, FnStep, NestedOrchestrator, ReActOrchestrator
+from agent_chassis.orchestration import AgentStep, FnStep, NestedOrchestrator, ReActPattern
 from payloads.code_quality import (
     FakeRepo,
     ScannerTaskSource,
@@ -85,8 +85,6 @@ def build(skill_points, extra=()):
             ctx.facts["commit"] = repo.commit(f"fix: {task.key}")
 
     chassis = Chassis("知识注入时机演示")
-    inner = ReActOrchestrator(box, make_decider(), criteria=None,
-                              max_iterations=8, executor_tools=["apply_fix"])
     orch = NestedOrchestrator(
         outer_steps=[
             FnStep("issue_analysis", pull),
@@ -94,7 +92,9 @@ def build(skill_points, extra=()):
             AgentStep("agent_fix", lambda t, c: None),
             FnStep("pr_creation", deliver),
         ],
-        inner=inner,
+        toolbox=box,
+        pattern=ReActPattern(make_decider(), max_iterations=8,
+                             executor_tools=["apply_fix"]),
         delegate_at="agent_fix",
         criteria=criteria,
     )

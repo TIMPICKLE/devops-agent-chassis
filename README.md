@@ -13,8 +13,9 @@
 ```
 底盘 Chassis（本仓库）              载荷 Payload（业务方提供）
 ├─ ① 编排契约  Orchestrator          ├─ TaskSource    任务从哪来
-├─ ② 接入层    Connector             └─ DoneCriteria  怎么算做完
-├─ ③ 知识注入  KnowledgeProvider         + 领域工具集
+│    └ 外层流程 + 内层 ReasoningPattern  └─ DoneCriteria  怎么算做完
+├─ ② 接入层    Connector                 + 领域工具集
+├─ ③ 知识注入  KnowledgeProvider
 ├─ ④ 失败契约  FailurePolicy
 └─ ⑤ 可观测    Observer
 ```
@@ -35,31 +36,58 @@ python examples/05_permissions_and_failure.py  # 能力借来，权限不借
 
 ---
 
-## ① 编排契约：编排形态是可插拔的
+## ① 编排契约：编排是两个正交的轴
 
-底盘不规定 Agent 该怎么被编排。它规定的是编排器必须回答的问题：
-**在哪一个点上、只在那一个点上，把决策权交给模型。**
+「编排形态」这个词经常把两件不同的事混在一起说。底盘把它们拆开：
 
-每个编排器通过 `delegation_points` 声明自己的下放点，装配报告会把它打出来。
+| 轴 | 管什么 | 换它会影响 |
+|---|---|---|
+| **外层 · 流程编排** `Orchestrator` | 任务被推进的骨架：阶段顺序、分支、路由、人工介入 | 流程的形状 |
+| **内层 · Agent 设计模式** `ReasoningPattern` | 在下放点内部，模型怎么想 | 轮数、token、可预测性 |
+
+两轴独立替换。同一个流程可以换推理模式，同一个推理模式可以放进不同流程。
+
+### 外层：流程编排
 
 | 形态 | 说明 | 下放点 |
 |---|---|---|
 | `StateMachineOrchestrator` | 线性状态机，一条主路径加一条失败短路 | 被标记的那个阶段 |
-| `ReActOrchestrator` | 单层循环，模型自己决定调什么、调几轮、什么时候停 | 整个循环 |
-| `NestedOrchestrator` | 外层状态机 + 内层 ReAct | 外层的一个阶段 |
+| `SingleAgentOrchestrator` | 没有外层骨架，整个任务交给一个推理模式 | 整个任务 |
 | `SubgraphOrchestrator` | 分析子图 → 路由 → 修复支路 → 人工介入 → 交付子图 | 各支路里的 AgentStep |
+| `NestedOrchestrator` | **不是第三种形态，是两轴的组合算子**：外层骨架 + 指定阶段下放给内层模式 | 外层的一个阶段 |
 
-换形态就是换 `with_orchestrator()` 的参数：
+### 内层：Agent 设计模式
+
+| 模式 | 特征 | 代价 |
+|---|---|---|
+| `ReActPattern` | 边想边做，每步观察后重新决策，收敛点由模型判断 | 轮次不可预测 |
+| `PlanExecutePattern` | 先出完整计划再执行，**计划是显式产物**，可被人审查 | 计划基于前置判断，不看中间观察 |
+| `ReWOOPattern` | 一次规划出全部调用，执行期间不再问模型 | token 最省，但无法中途调整 |
+| `ReflexionPattern` | **装饰器**，包住其他任一模式，跑完自省，不满意带着教训重来 | 最贵 |
+
+底盘不替业务选哪一种，只保证能换。每个编排器通过 `delegation_points` 声明下放点，
+`reasoning_name` 声明内层模式，装配报告会把两者都打出来。
 
 ```python
-chassis.with_orchestrator(NestedOrchestrator(outer_steps, inner, "agent_fix", criteria))
+chassis.with_orchestrator(
+    NestedOrchestrator(
+        outer_steps=steps,                       # 外层骨架
+        toolbox=box,
+        pattern=PlanExecutePattern(planner),     # 内层模式，换这一行就够
+        delegate_at="agent_fix",
+        criteria=criteria,
+    )
+)
 ```
 
-`examples/01` 用同一个载荷把四种形态各跑一遍，任务源、完成判据、工具集全程不变。
+`examples/01` 分三部分证明两轴正交：固定内层换外层、固定外层换内层，
+最后把 3 × 4 全矩阵**真的各跑一遍**，打出每一格的模型调用次数。
 
 **关于工作流引擎**：线性五阶段只有一条主路径和一条失败短路，没有分支、并发、循环。
 这种形状引入引擎不产生收益，只多一层需要理解和调试的抽象。所以 `StateMachineOrchestrator`
-就是一个循环加一个异常判断。真正需要引擎的是 `SubgraphOrchestrator` 那种形状。
+就是一个循环加一个异常判断。真正需要引擎的是 `SubgraphOrchestrator` 那种形状 ——
+它的不同支路还可以挂不同的推理模式：命名类走 ReWOO 省 token，认知复杂度类走
+Reflexion 包 ReAct 换准确率。这是两轴分离带来的最直接的好处。
 
 ---
 
@@ -202,11 +230,17 @@ def try_commit(message):
 ```python
 from agent_chassis import Chassis, ConsoleObserver, InjectionPoint, borrowed_executor
 from agent_chassis.knowledge import SkillLibrary, SkillProvider, by_extension
-from agent_chassis.orchestration import NestedOrchestrator, ReActOrchestrator
+from agent_chassis.orchestration import NestedOrchestrator, ReActPattern
 
 chassis = (
     Chassis("代码质量治理数字员工")
-    .with_orchestrator(NestedOrchestrator(outer_steps, inner, "agent_fix", criteria))
+    .with_orchestrator(NestedOrchestrator(
+        outer_steps=outer_steps,                  # 外层·流程
+        toolbox=box,
+        pattern=ReActPattern(decide),             # 内层·Agent 设计模式
+        delegate_at="agent_fix",
+        criteria=criteria,
+    ))
     .mount("scanner", "mcp.stdio", command="sonarqube-mcp")
     .mount("vcs", "mcp.stdio", command="azure-devops-mcp")
     .with_knowledge(SkillProvider(skills, points=[InjectionPoint.BEFORE_EXECUTOR]))
@@ -235,7 +269,8 @@ src/agent_chassis/
 ├── permissions.py        权限边界
 ├── failure.py            失败契约、去重账本、开工前清理
 ├── observability.py      四张通用表与两个观察者
-├── orchestration/        四种编排形态
+├── orchestration/        外层流程编排
+│   └── reasoning.py      内层 Agent 设计模式
 ├── integration/          连接器与工具名容错解析
 └── knowledge/            注入时机调度与多级路由
 

@@ -53,6 +53,7 @@ class BuildReport:
     """装配自检报告。路演时直接打出来，说明这台机器由什么构成。"""
     name: str
     orchestrator: str
+    reasoning: str
     delegation_points: List[str]
     connectors: Dict[str, List[str]]
     injection_timeline: List[tuple]
@@ -64,7 +65,9 @@ class BuildReport:
     def render(self) -> str:
         lines = [
             f"╔ 装配报告 · {self.name}",
-            f"║ ① 编排契约   {self.orchestrator}",
+            f"║ ① 编排契约",
+            f"║   外层·流程   {self.orchestrator}",
+            f"║   内层·模式   {self.reasoning}",
             f"║              决策下放点：{', '.join(self.delegation_points) or '无'}",
             "║ ② 接入层",
         ]
@@ -182,6 +185,7 @@ class Chassis:
         return BuildReport(
             name=self.name,
             orchestrator=self._orchestrator.describe(),
+            reasoning=getattr(self._orchestrator, "reasoning_name", "（该编排器未声明推理模式）"),
             delegation_points=list(self._orchestrator.delegation_points),
             connectors=self.connectors.inventory(),
             injection_timeline=self._scheduler.timeline(),

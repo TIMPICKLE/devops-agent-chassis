@@ -18,6 +18,7 @@ from .contracts import (
     Observer,
     Orchestrator,
     Outcome,
+    ReasoningPattern,
     RunContext,
     Registry,
     Step,
@@ -39,7 +40,18 @@ from .knowledge import (
     by_filename_markers,
 )
 from .observability import ConsoleObserver, RecordingObserver
-from .orchestration import orchestrator_registry
+from .orchestration import (
+    NestedOrchestrator,
+    PlanExecutePattern,
+    ReActPattern,
+    ReWOOPattern,
+    ReflexionPattern,
+    SingleAgentOrchestrator,
+    StateMachineOrchestrator,
+    SubgraphOrchestrator,
+    orchestrator_registry,
+    reasoning_registry,
+)
 from .permissions import PermissionBoundary, PermissionDenied, borrowed_executor
 
 __version__ = "0.1.0"
@@ -57,14 +69,23 @@ __all__ = [
     "InjectionScheduler",
     "KnowledgeProvider",
     "Ledger",
+    "NestedOrchestrator",
     "Observer",
     "Orchestrator",
     "Outcome",
     "PermissionBoundary",
     "PermissionDenied",
+    "PlanExecutePattern",
+    "ReActPattern",
+    "ReWOOPattern",
+    "ReasoningPattern",
     "RecordingObserver",
+    "ReflexionPattern",
     "Registry",
     "RetryFeedback",
+    "SingleAgentOrchestrator",
+    "StateMachineOrchestrator",
+    "SubgraphOrchestrator",
     "RetryThenGiveUpPolicy",
     "RunContext",
     "SkillLibrary",
@@ -83,5 +104,6 @@ __all__ = [
     "by_filename_markers",
     "connector_registry",
     "orchestrator_registry",
+    "reasoning_registry",
     "__version__",
 ]

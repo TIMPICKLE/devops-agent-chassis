@@ -1,16 +1,21 @@
 """
-① 编排契约 —— 可插拔的编排形态。
+① 编排契约 —— 外层流程编排。
 
-底盘不规定 Agent 该怎么被编排。它规定的是编排器必须回答的问题：
-**在哪一个点上，只在那一个点上，把决策权交给模型。**
+底盘把编排拆成两个正交的轴：
 
-每个编排器通过 `delegation_points` 声明自己的下放点，底盘据此生成
-信任边界报告。四种内置形态可以按名字互换，载荷代码一行不用动：
+    外层 · 流程编排 Flow（本模块）      内层 · 推理模式 Reasoning（reasoning.py）
+    ├─ StateMachineOrchestrator        ├─ ReActPattern
+    ├─ SubgraphOrchestrator            ├─ PlanExecutePattern
+    └─ SingleAgentOrchestrator         ├─ ReWOOPattern
+                                       └─ ReflexionPattern
+                    ↘            ↙
+                 NestedOrchestrator（组合算子）
 
-    state_machine   线性状态机。当前生产使用，二十行代码
-    react           单层 ReAct 循环。全程由模型驱动
-    nested          外层状态机 + 内层 ReAct。生产实际形态
-    subgraph        分层子图 + 路由 + 人工介入。下一代设计
+外层决定任务被推进的骨架，内层决定模型在下放点内部怎么想。
+换外层不影响内层，换内层不影响外层。
+
+底盘不规定用哪一种，但要求每个编排器通过 `delegation_points` 说清楚
+**在哪一个点、只在那一个点，把决策权交给了模型**。
 """
 from __future__ import annotations
 
@@ -22,6 +27,7 @@ from ..contracts import (
     InjectionPoint,
     Orchestrator,
     Outcome,
+    ReasoningPattern,
     Registry,
     RunContext,
     Step,
@@ -29,12 +35,23 @@ from ..contracts import (
     TaskResult,
     Verdict,
 )
+from .reasoning import (
+    Critic,
+    Decide,
+    Planner,
+    PlanExecutePattern,
+    ReActPattern,
+    ReWOOPattern,
+    ReflexionPattern,
+    invoke_tool,
+    reasoning_registry,
+)
 
 orchestrator_registry = Registry("orchestrator")
 
 
 # ═══════════════════════════════════════════════════════════
-#  通用阶段
+#  通用阶段与工具集
 # ═══════════════════════════════════════════════════════════
 
 class FnStep(Step):
@@ -57,18 +74,61 @@ class FnStep(Step):
 class AgentStep(Step):
     """把决策权交给模型的那个阶段。
 
-    它是编排器里唯一 `delegates_to_model = True` 的阶段类型。
-    内部跑什么由 `runner` 决定，可以是 ReAct 循环，也可以是一次性调用。
+    它是流程里唯一 `delegates_to_model = True` 的阶段类型。
+    内部跑哪种推理模式由 pattern 决定；也可以传 runner 写死一段固定逻辑，
+    用于对照「不用 Agent 会怎样」。
     """
 
     delegates_to_model = True
 
-    def __init__(self, name: str, runner: Callable[[Task, RunContext], None]) -> None:
+    def __init__(
+        self,
+        name: str,
+        runner: Optional[Callable[[Task, RunContext], None]] = None,
+        pattern: Optional[ReasoningPattern] = None,
+        toolbox: Any = None,
+    ) -> None:
+        if runner is None and pattern is None:
+            raise ValueError("AgentStep 需要 runner 或 pattern 其一")
         self.name = name
         self.runner = runner
+        self.pattern = pattern
+        self.toolbox = toolbox
 
     def execute(self, task: Task, ctx: RunContext) -> None:
-        self.runner(task, ctx)
+        if self.pattern is not None:
+            self.pattern.reason(task, ctx, self.toolbox)
+        else:
+            self.runner(task, ctx)
+
+
+class ToolBox:
+    """暴露给模型的工具集合。
+
+    与 ConnectorManager 的区别：连接器是给确定性代码直接调的，
+    ToolBox 是给模型选的。同一个能力可以两边都出现，但走的是两条路。
+    """
+
+    def __init__(self) -> None:
+        self._tools: Dict[str, Callable[..., Any]] = {}
+        self._desc: Dict[str, str] = {}
+
+    def add(self, name: str, fn: Callable[..., Any], description: str = "") -> "ToolBox":
+        self._tools[name] = fn
+        doc = (fn.__doc__ or "").strip().splitlines()
+        self._desc[name] = description or (doc[0] if doc else "")
+        return self
+
+    def names(self) -> List[str]:
+        return list(self._tools)
+
+    def schema(self) -> List[Dict[str, str]]:
+        return [{"name": n, "description": self._desc.get(n, "")} for n in self._tools]
+
+    def call(self, name: str, **kwargs: Any) -> Any:
+        if name not in self._tools:
+            raise KeyError(f"未注册工具 {name!r}，可用：{self.names()}")
+        return self._tools[name](**kwargs)
 
 
 def _finish(
@@ -99,15 +159,29 @@ def _finish(
     )
 
 
+def _mark(ctx: RunContext, task: Task, label: str) -> None:
+    ctx.record_step(label)
+    if ctx.chassis is not None:
+        ctx.chassis.notify_step(label, task, ctx)
+
+
+def _pattern_of(steps: Sequence[Step]) -> Optional[ReasoningPattern]:
+    for s in steps:
+        pattern = getattr(s, "pattern", None)
+        if pattern is not None:
+            return pattern
+    return None
+
+
 # ═══════════════════════════════════════════════════════════
-#  形态一：线性状态机
+#  外层形态一：线性状态机
 # ═══════════════════════════════════════════════════════════
 
 @orchestrator_registry.register("state_machine")
 class StateMachineOrchestrator(Orchestrator):
     """按顺序推进阶段，任一阶段抛异常即短路。
 
-    这是当前生产使用的形态。五个阶段只有一条主路径和一条失败短路，
+    这是当前生产使用的外层形态。五个阶段只有一条主路径和一条失败短路，
     没有分支、并发、循环。这种形状引入工作流引擎不产生收益，
     只多一层需要理解和调试的抽象。所以它就是一个循环加一个异常判断。
     """
@@ -119,138 +193,74 @@ class StateMachineOrchestrator(Orchestrator):
         self.criteria = criteria
         self.delegation_points = [s.name for s in self.steps if s.delegates_to_model]
 
+    @property
+    def reasoning_name(self) -> str:
+        pattern = _pattern_of(self.steps)
+        return pattern.describe() if pattern else "（下放点内为固定逻辑，未用推理模式）"
+
     def run(self, task: Task, ctx: RunContext) -> TaskResult:
         started = time.time()
         for step in self.steps:
-            ctx.record_step(step.name)
-            if ctx.chassis is not None:
-                ctx.chassis.notify_step(step.name, task, ctx)
+            _mark(ctx, task, step.name)
             step.execute(task, ctx)
         return _finish(task, ctx, self.criteria, started)
 
 
 # ═══════════════════════════════════════════════════════════
-#  形态二：单层 ReAct 循环
+#  外层形态二：单 Agent
 # ═══════════════════════════════════════════════════════════
 
-class ToolBox:
-    """暴露给模型的工具集合。
+@orchestrator_registry.register("single_agent")
+class SingleAgentOrchestrator(Orchestrator):
+    """没有外层骨架，整个任务从头到尾交给一个推理模式。
 
-    与 ConnectorManager 的区别：连接器是给确定性代码直接调的，
-    ToolBox 是给模型选的。同一个能力可以两边都出现，但走的是两条路。
+    最激进的下放方式。适合任务本身就是一次开放式求解、
+    前后没有必须由确定性代码把守的阶段的场景。
     """
 
-    def __init__(self) -> None:
-        self._tools: Dict[str, Callable[..., Any]] = {}
-        self._desc: Dict[str, str] = {}
-
-    def add(self, name: str, fn: Callable[..., Any], description: str = "") -> "ToolBox":
-        self._tools[name] = fn
-        self._desc[name] = description or (fn.__doc__ or "").strip().splitlines()[0] if fn.__doc__ else description
-        return self
-
-    def names(self) -> List[str]:
-        return list(self._tools)
-
-    def schema(self) -> List[Dict[str, str]]:
-        return [{"name": n, "description": self._desc.get(n, "")} for n in self._tools]
-
-    def call(self, name: str, **kwargs: Any) -> Any:
-        if name not in self._tools:
-            raise KeyError(f"未注册工具 {name!r}，可用：{self.names()}")
-        return self._tools[name](**kwargs)
-
-
-#: 决策函数签名：给定任务、上下文、可用工具，返回下一步动作
-#: 返回 ("call", tool_name, kwargs) 或 ("stop", reason, None)
-Decide = Callable[[Task, RunContext, ToolBox], tuple]
-
-
-@orchestrator_registry.register("react")
-class ReActOrchestrator(Orchestrator):
-    """单层 ReAct：模型全程驱动，自己决定调什么、调几轮、什么时候停。
-
-    底盘只强制两件事：迭代上限，以及每次工具调用前触发 BEFORE_TOOL 注入。
-    收敛点由模型判断 —— 这正是 Agent 与写死步数的 pipeline 的分界线。
-    """
-
-    name = "react"
-    delegation_points = ["整个循环"]
+    name = "single_agent"
+    delegation_points = ["整个任务"]
 
     def __init__(
         self,
         toolbox: ToolBox,
-        decide: Decide,
+        pattern: ReasoningPattern,
         criteria: Optional[DoneCriteria] = None,
-        max_iterations: int = 8,
-        executor_tools: Sequence[str] = (),
     ) -> None:
         self.toolbox = toolbox
-        self.decide = decide
+        self.pattern = pattern
         self.criteria = criteria
-        self.max_iterations = max_iterations
-        #: 这些工具会把活交给外部执行器，调用前触发 BEFORE_EXECUTOR
-        #: 而不是 BEFORE_TOOL。规范就是在这一刻拼进去的。
-        self.executor_tools = set(executor_tools)
+
+    @property
+    def reasoning_name(self) -> str:
+        return self.pattern.describe()
 
     def run(self, task: Task, ctx: RunContext) -> TaskResult:
         started = time.time()
-        ctx.record_step("react_loop")
-        if ctx.chassis is not None:
-            ctx.chassis.notify_step("react_loop", task, ctx)
-
-        for _ in range(self.max_iterations):
-            ctx.iterations += 1
-            action, target, kwargs = self.decide(task, ctx, self.toolbox)
-            if action == "stop":
-                ctx.note(f"模型判断收敛：{target}")
-                break
-            if ctx.chassis is not None:
-                point = (
-                    InjectionPoint.BEFORE_EXECUTOR
-                    if target in self.executor_tools
-                    else InjectionPoint.BEFORE_TOOL
-                )
-                ctx.chassis.inject(point, task, ctx)
-            result = self._invoke(target, kwargs or {}, task, ctx)
-            ctx.facts.setdefault("tool_results", {})[target] = result
-        else:
-            ctx.note(f"达到迭代上限 {self.max_iterations}，强制收敛")
-
+        _mark(ctx, task, f"reasoning[{self.pattern.name}]")
+        self.pattern.reason(task, ctx, self.toolbox)
         return _finish(task, ctx, self.criteria, started)
-
-    def _invoke(self, tool: str, kwargs: Dict[str, Any], task: Task, ctx: RunContext) -> Any:
-        from ..contracts import ToolCall
-        t0 = time.time()
-        try:
-            out = self.toolbox.call(tool, **kwargs)
-            rec = ToolCall(name=tool, args=kwargs, result=out, ok=True,
-                           elapsed_ms=int((time.time() - t0) * 1000))
-        except Exception as exc:
-            rec = ToolCall(name=tool, args=kwargs, ok=False,
-                           error=f"{type(exc).__name__}: {exc}",
-                           elapsed_ms=int((time.time() - t0) * 1000))
-            ctx.tool_calls.append(rec)
-            if ctx.chassis is not None:
-                ctx.chassis.notify_tool_call(rec, task, ctx)
-            raise
-        ctx.tool_calls.append(rec)
-        if ctx.chassis is not None:
-            ctx.chassis.notify_tool_call(rec, task, ctx)
-        return out
 
 
 # ═══════════════════════════════════════════════════════════
-#  形态三：嵌套（生产实际形态）
+#  组合算子：外层骨架 × 内层模式
 # ═══════════════════════════════════════════════════════════
 
 @orchestrator_registry.register("nested")
 class NestedOrchestrator(Orchestrator):
-    """外层确定性状态机，内层 ReAct 循环。
+    """把外层流程与内层推理模式接起来。
 
-    外层的每个阶段都是确定性代码，只有被标记为下放点的那个阶段
-    把控制权交给内层循环。这是「在哪一个点上把决策权交出去」这个
-    问题最直接的结构化回答。
+    这不是第三种编排形态，而是**两个轴的组合算子**。外层的每个阶段
+    都是确定性代码，只有 `delegate_at` 指定的那个阶段把控制权交给内层。
+
+        NestedOrchestrator(
+            outer_steps=[...],                      # 外层骨架
+            toolbox=box,
+            pattern=PlanExecutePattern(planner),    # 内层模式，随时可换
+            delegate_at="agent_fix",
+        )
+
+    换推理模式不影响外层，换外层不影响推理模式。
     """
 
     name = "nested"
@@ -258,12 +268,14 @@ class NestedOrchestrator(Orchestrator):
     def __init__(
         self,
         outer_steps: Sequence[Step],
-        inner: ReActOrchestrator,
+        toolbox: ToolBox,
+        pattern: ReasoningPattern,
         delegate_at: str,
         criteria: Optional[DoneCriteria] = None,
     ) -> None:
         self.outer_steps = list(outer_steps)
-        self.inner = inner
+        self.toolbox = toolbox
+        self.pattern = pattern
         self.delegate_at = delegate_at
         self.criteria = criteria
         self.delegation_points = [delegate_at]
@@ -273,25 +285,24 @@ class NestedOrchestrator(Orchestrator):
                 f"{[s.name for s in self.outer_steps]}"
             )
 
+    @property
+    def reasoning_name(self) -> str:
+        return self.pattern.describe()
+
     def run(self, task: Task, ctx: RunContext) -> TaskResult:
         started = time.time()
         for step in self.outer_steps:
-            ctx.record_step(step.name)
-            if ctx.chassis is not None:
-                ctx.chassis.notify_step(step.name, task, ctx)
+            _mark(ctx, task, step.name)
             if step.name == self.delegate_at:
-                # 唯一的下放点：内层循环接管，跑完把控制权还回来
-                inner_ctx_steps = len(ctx.steps)
-                self.inner.run(task, ctx)
-                del ctx.steps[inner_ctx_steps:]
-                ctx.record_step(f"{step.name}(内层已收敛)")
+                _mark(ctx, task, f"reasoning[{self.pattern.name}]")
+                self.pattern.reason(task, ctx, self.toolbox)
             else:
                 step.execute(task, ctx)
         return _finish(task, ctx, self.criteria, started)
 
 
 # ═══════════════════════════════════════════════════════════
-#  形态四：分层子图（下一代设计）
+#  外层形态三：分层子图（下一代设计）
 # ═══════════════════════════════════════════════════════════
 
 #: 路由函数：给定任务返回下一个子图名
@@ -307,10 +318,7 @@ class Subgraph:
 
     def run(self, task: Task, ctx: RunContext) -> None:
         for step in self.steps:
-            label = f"{self.name}/{step.name}"
-            ctx.record_step(label)
-            if ctx.chassis is not None:
-                ctx.chassis.notify_step(label, task, ctx)
+            _mark(ctx, task, f"{self.name}/{step.name}")
             step.execute(task, ctx)
 
 
@@ -318,8 +326,9 @@ class Subgraph:
 class SubgraphOrchestrator(Orchestrator):
     """分析子图 → 路由 → 修复子图（多支路）→ 人工介入 → 交付子图。
 
-    这是当前平铺式状态机的下一代形态。命名类走轻量支路，认知复杂度类
-    走深度支路，高风险任务在子图之间停下来等人决策。
+    这是当前平铺式状态机的下一代外层形态。不同支路可以挂**不同的推理模式**：
+    命名类走 ReWOO（便宜、可预测），认知复杂度类走 Reflexion 包 ReAct（贵、能自省）。
+    这正是两轴分离带来的直接好处。
 
     到这个形状才真正需要工作流引擎。当前形态不需要，所以当前不用。
     """
@@ -350,16 +359,22 @@ class SubgraphOrchestrator(Orchestrator):
             if s.delegates_to_model
         ]
 
+    @property
+    def reasoning_name(self) -> str:
+        seen = []
+        for g in [self.analysis, *self.branches.values(), self.delivery]:
+            pattern = _pattern_of(g.steps)
+            if pattern is not None:
+                seen.append(f"{g.name}→{pattern.name}")
+        return "；".join(seen) or "（各支路未使用推理模式）"
+
     def run(self, task: Task, ctx: RunContext) -> TaskResult:
         started = time.time()
-
         self.analysis.run(task, ctx)
 
         branch_name = self.router(task, ctx)
         ctx.facts["route"] = branch_name
-        ctx.record_step(f"route → {branch_name}")
-        if ctx.chassis is not None:
-            ctx.chassis.notify_step(f"route → {branch_name}", task, ctx)
+        _mark(ctx, task, f"route → {branch_name}")
         if branch_name not in self.branches:
             raise KeyError(
                 f"路由到未知支路 {branch_name!r}，可用：{sorted(self.branches)}"
@@ -367,9 +382,7 @@ class SubgraphOrchestrator(Orchestrator):
         self.branches[branch_name].run(task, ctx)
 
         if self.interrupt_if and self.interrupt_if(task, ctx):
-            ctx.record_step("human_in_the_loop")
-            if ctx.chassis is not None:
-                ctx.chassis.notify_step("human_in_the_loop", task, ctx)
+            _mark(ctx, task, "human_in_the_loop")
             approved = self.on_interrupt(task, ctx) if self.on_interrupt else False
             ctx.facts["human_approved"] = approved
             if not approved:
@@ -385,15 +398,25 @@ class SubgraphOrchestrator(Orchestrator):
 
 
 __all__ = [
+    # 外层：流程编排
     "AgentStep",
-    "Decide",
     "FnStep",
     "NestedOrchestrator",
-    "ReActOrchestrator",
     "Router",
+    "SingleAgentOrchestrator",
     "StateMachineOrchestrator",
     "Subgraph",
     "SubgraphOrchestrator",
     "ToolBox",
     "orchestrator_registry",
+    # 内层：Agent 设计模式（转出，方便一处 import）
+    "Critic",
+    "Decide",
+    "Planner",
+    "PlanExecutePattern",
+    "ReActPattern",
+    "ReWOOPattern",
+    "ReflexionPattern",
+    "invoke_tool",
+    "reasoning_registry",
 ]

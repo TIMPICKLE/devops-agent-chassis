@@ -128,10 +128,10 @@ class DoneCriteria(ABC):
 # ═══════════════════════════════════════════════════════════
 
 class Orchestrator(ABC):
-    """编排器：决定一个任务被怎样推进。
+    """外层流程编排：决定一个任务被怎样推进。
 
-    底盘不规定编排形态。线性状态机、ReAct 循环、Plan-and-Execute、
-    分层子图都是合法实现，通过注册表按名字替换，载荷代码不用动。
+    这是「骨架」那一轴。线性状态机、分层子图、DAG 都是合法实现。
+    它不规定模型怎么思考，只规定在哪一个阶段把控制权交出去。
     """
 
     name: str = "orchestrator"
@@ -145,6 +145,28 @@ class Orchestrator(ABC):
     def describe(self) -> str:
         pts = ", ".join(self.delegation_points) or "无"
         return f"{self.name}（下放点：{pts}）"
+
+
+class ReasoningPattern(ABC):
+    """内层推理模式：在下放点内部，模型怎么想。
+
+    这是「思考方式」那一轴，也就是通常说的 Agent 设计模式：
+    ReAct、Plan-and-Execute、ReWOO、Reflexion 等。
+
+    与 Orchestrator 正交：同一个流程可以换推理模式，
+    同一个推理模式可以放进不同流程。
+    """
+
+    name: str = "reasoning"
+    description: str = ""
+
+    @abstractmethod
+    def reason(self, task: Task, ctx: "RunContext", toolbox: Any) -> None:
+        """就地推进 ctx。工具调用请走 orchestration.reasoning.invoke_tool，
+        它统一处理知识注入时机与调用记账。"""
+
+    def describe(self) -> str:
+        return f"{self.name}：{self.description}" if self.description else self.name
 
 
 class Step(ABC):

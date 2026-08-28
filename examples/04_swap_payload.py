@@ -26,7 +26,7 @@ from agent_chassis import (
 )
 from agent_chassis.failure import Ledger, ZeroSideEffectPolicy
 from agent_chassis.knowledge import SkillLibrary, SkillProvider, by_extension, by_filename_markers
-from agent_chassis.orchestration import AgentStep, FnStep, NestedOrchestrator, ReActOrchestrator
+from agent_chassis.orchestration import AgentStep, FnStep, NestedOrchestrator, ReActPattern
 
 from payloads import code_quality as p1
 from payloads import pr_mention as p2
@@ -51,11 +51,12 @@ SKILLS = SkillLibrary(
 def shared_chassis(name: str, source, criteria, box, outer_steps, recorder):
     """底盘装配代码。两个载荷共用这一段，一字不差。"""
     boundary = borrowed_executor(f"executor@{name}")
-    inner = ReActOrchestrator(box, DECIDERS[name], criteria=None, max_iterations=8,
-                              executor_tools=["apply_fix", "draft_change"])
+    pattern = ReActPattern(DECIDERS[name], max_iterations=8,
+                           executor_tools=["apply_fix", "draft_change"])
     return (
         Chassis(name)
-        .with_orchestrator(NestedOrchestrator(outer_steps, inner, "agent_work", criteria))
+        .with_orchestrator(
+            NestedOrchestrator(outer_steps, box, pattern, "agent_work", criteria))
         .with_knowledge(SkillProvider(SKILLS, points=[InjectionPoint.BEFORE_EXECUTOR]))
         .with_failure_policy(ZeroSideEffectPolicy(Ledger()))
         .with_boundary(boundary)

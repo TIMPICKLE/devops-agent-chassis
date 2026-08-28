@@ -24,7 +24,11 @@ from agent_chassis.orchestration import (
     AgentStep,
     FnStep,
     NestedOrchestrator,
-    ReActOrchestrator,
+    PlanExecutePattern,
+    ReActPattern,
+    ReWOOPattern,
+    ReflexionPattern,
+    SingleAgentOrchestrator,
     StateMachineOrchestrator,
 )
 from agent_chassis.permissions import PermissionDenied
@@ -34,7 +38,9 @@ from payloads.code_quality import (
     ScannerTaskSource,
     WorkspaceChangedCriteria,
     build_toolbox,
+    make_critic,
     make_decider,
+    make_planner,
 )
 
 
@@ -93,51 +99,115 @@ def _steps(repo, agent_fn):
     ]
 
 
+def _react():
+    return ReActPattern(make_decider(), executor_tools=["apply_fix"])
+
+
+def _nested(pattern_factory=_react):
+    """外层五阶段 + 可替换的内层模式。"""
+    def factory(repo, box, criteria):
+        return NestedOrchestrator(
+            outer_steps=_steps(repo, lambda t, c: None),
+            toolbox=box,
+            pattern=pattern_factory(),
+            delegate_at="agent_fix",
+            criteria=criteria,
+        )
+    return factory
+
+
 # ═══════════════════════════════════════════════════════════
-#  ① 编排可互换
+#  ①-A 外层流程可互换（固定内层 ReAct）
 # ═══════════════════════════════════════════════════════════
 
-def test_orchestrators_are_interchangeable():
-    """同一个载荷，三种编排形态都应跑成功。"""
+def test_flows_are_interchangeable():
+    """同一个载荷、同一个内层模式，换外层骨架都应跑成功。"""
     def sm(repo, box, criteria):
         def fix(task, ctx):
             box.call("apply_fix", path=task.payload["path"])
             ctx.iterations = 1
         return StateMachineOrchestrator(_steps(repo, fix), criteria)
 
-    def react(repo, box, criteria):
-        return ReActOrchestrator(box, make_decider(), criteria,
-                                 executor_tools=["apply_fix"])
+    def single(repo, box, criteria):
+        repo.checkout_new("fix/single")
+        return SingleAgentOrchestrator(box, _react(), criteria)
 
-    def nested(repo, box, criteria):
-        inner = ReActOrchestrator(box, make_decider(), None,
-                                  executor_tools=["apply_fix"])
-        return NestedOrchestrator(_steps(repo, lambda t, c: None), inner,
-                                  "agent_fix", criteria)
-
-    for factory in (sm, react, nested):
+    for factory in (sm, single, _nested()):
         chassis, *_ = _make(factory)
         result = chassis.run_once()
         assert result is not None
-        assert result.outcome is Outcome.SUCCEEDED, factory.__name__
+        assert result.outcome is Outcome.SUCCEEDED
+
+
+# ═══════════════════════════════════════════════════════════
+#  ①-B 内层 Agent 设计模式可互换（固定外层状态机）
+# ═══════════════════════════════════════════════════════════
+
+def test_reasoning_patterns_are_interchangeable():
+    """外层一模一样，几种 Agent 设计模式都应跑成功。"""
+    patterns = {
+        "ReAct": _react,
+        "Plan-and-Execute": lambda: PlanExecutePattern(
+            make_planner(), executor_tools=["apply_fix"]),
+        "ReWOO": lambda: ReWOOPattern(
+            make_planner(), executor_tools=["apply_fix"]),
+    }
+    for expected, factory in patterns.items():
+        chassis, *_ = _make(_nested(factory))
+        result = chassis.run_once()
+        assert result.outcome is Outcome.SUCCEEDED, expected
+        assert expected in chassis.report().reasoning
+
+
+def test_reflexion_wraps_another_pattern():
+    """Reflexion 是装饰器，内层名字要能在报告里看到。"""
+    def factory(repo, box, criteria):
+        pattern = ReflexionPattern(
+            inner=ReActPattern(make_decider(), executor_tools=["apply_fix"]),
+            critic=make_critic(repo),
+        )
+        return NestedOrchestrator(_steps(repo, lambda t, c: None), box,
+                                  pattern, "agent_fix", criteria)
+
+    chassis, *_ = _make(factory)
+    assert chassis.run_once().outcome is Outcome.SUCCEEDED
+    assert "Reflexion(ReAct)" in chassis.report().reasoning
+
+
+def test_two_axes_are_independent():
+    """换外层不影响内层名，换内层不影响下放点。这就是两轴正交的意思。"""
+    repo_a = FakeRepo()
+    box_a = build_toolbox(repo_a, borrowed_executor("x"))
+    nested = NestedOrchestrator(_steps(repo_a, lambda t, c: None), box_a,
+                                _react(), "agent_fix")
+
+    repo_b = FakeRepo()
+    box_b = build_toolbox(repo_b, borrowed_executor("x"))
+    single = SingleAgentOrchestrator(box_b, _react())
+
+    # 外层不同，内层同名
+    assert nested.name != single.name
+    assert nested.reasoning_name == single.reasoning_name
+
+    # 内层不同，外层下放点不变
+    other = NestedOrchestrator(_steps(repo_a, lambda t, c: None), box_a,
+                               ReWOOPattern(make_planner()), "agent_fix")
+    assert other.delegation_points == nested.delegation_points
+    assert other.reasoning_name != nested.reasoning_name
 
 
 def test_delegation_points_are_declared():
     """编排器必须说清楚它在哪里把决策权交出去。"""
-    def nested(repo, box, criteria):
-        inner = ReActOrchestrator(box, make_decider(), None)
-        return NestedOrchestrator(_steps(repo, lambda t, c: None), inner,
-                                  "agent_fix", criteria)
-    chassis, *_ = _make(nested)
+    chassis, *_ = _make(_nested())
     assert chassis.report().delegation_points == ["agent_fix"]
 
 
 def test_nested_rejects_unknown_delegate_point():
-    box_repo = FakeRepo()
-    box = build_toolbox(box_repo, borrowed_executor("x"))
-    inner = ReActOrchestrator(box, make_decider())
+    repo = FakeRepo()
+    box = build_toolbox(repo, borrowed_executor("x"))
     with pytest.raises(ValueError):
-        NestedOrchestrator(_steps(box_repo, lambda t, c: None), inner, "not_a_step")
+        NestedOrchestrator(_steps(repo, lambda t, c: None), box,
+                           _react(), "not_a_step")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -174,24 +244,14 @@ def test_connector_calls_are_recorded():
 
 def test_agent_boot_stays_empty_by_default():
     """默认配置下，决策层不该拿到任何技术栈规范。"""
-    def nested(repo, box, criteria):
-        inner = ReActOrchestrator(box, make_decider(), None,
-                                  executor_tools=["apply_fix"])
-        return NestedOrchestrator(_steps(repo, lambda t, c: None), inner,
-                                  "agent_fix", criteria)
-    chassis, *_ = _make(nested)
+    chassis, *_ = _make(_nested())
     timeline = dict(chassis.report().injection_timeline)
     assert timeline[InjectionPoint.AGENT_BOOT] == []
     assert timeline[InjectionPoint.BEFORE_EXECUTOR] == ["skills"]
 
 
 def test_injection_actually_fires_before_executor():
-    def nested(repo, box, criteria):
-        inner = ReActOrchestrator(box, make_decider(), None,
-                                  executor_tools=["apply_fix"])
-        return NestedOrchestrator(_steps(repo, lambda t, c: None), inner,
-                                  "agent_fix", criteria)
-    chassis, _, rec, _ = _make(nested)
+    chassis, _, rec, _ = _make(_nested())
     chassis.run_once()
     injected = [t for t in rec.traces if t.kind == "injection"]
     assert injected, "应当至少发生一次注入"
