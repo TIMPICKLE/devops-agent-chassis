@@ -1,0 +1,213 @@
+name: Live Digital Employee Assembly
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-digital-employee-assembly
+  cancel-in-progress: false
+
+jobs:
+  live-assembly:
+    name: Claude Code + GLM-5.3-Flash · Live Assembly
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      BIGMODEL_API_KEY: ${{ secrets.BIGMODEL_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.BIGMODEL_API_KEY }}
+      ANTHROPIC_BASE_URL: https://open.bigmodel.cn/api/anthropic
+      ANTHROPIC_MODEL: glm-5.3-flash
+      LIVE_PROVIDER_JSON: /tmp/live-provider.json
+      LIVE_INTERVIEW_JSON: /tmp/live-interview.json
+      LIVE_ASSEMBLY_JSON: /tmp/live-assembly.json
+      LIVE_ASSEMBLY_REPORT: /tmp/live-assembly-report.json
+
+    steps:
+      - name: Checkout without write credentials
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Install project and Claude Code
+        shell: bash
+        run: |
+          python -m pip install -e ".[mcp,dev]" uvicorn
+          npm install --global @anthropic-ai/claude-code@latest
+          claude --version
+
+      - name: Preflight GLM-5.3-Flash through BigModel Anthropic-compatible API
+        shell: bash
+        run: |
+          set +e
+          if [[ -z "$BIGMODEL_API_KEY" ]]; then
+            echo '{"error":{"type":"missing_secret","message":"BIGMODEL_API_KEY GitHub Secret is not configured"}}' > "$LIVE_PROVIDER_JSON"
+            code=2
+          else
+            curl -sS --fail-with-body \
+              -o "$LIVE_PROVIDER_JSON" \
+              https://open.bigmodel.cn/api/anthropic/v1/messages \
+              -H "x-api-key: $BIGMODEL_API_KEY" \
+              -H "content-type: application/json" \
+              --data '{"model":"glm-5.3-flash","max_tokens":256,"messages":[{"role":"user","content":"Reply with exactly: FLASH_OK"}]}'
+            code=$?
+          fi
+          echo "LIVE_PROVIDER_EXIT=$code" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Stage 1 · real Skill interview turn
+        shell: bash
+        run: |
+          mkdir -p generated
+          SESSION_ID="$(python - <<'PY'
+          import uuid
+          print(uuid.uuid4())
+          PY
+          )"
+          echo "LIVE_SESSION_ID=$SESSION_ID" >> "$GITHUB_ENV"
+
+          set +e
+          timeout --signal=TERM 300s claude -p \
+            --session-id "$SESSION_ID" \
+            --model "$ANTHROPIC_MODEL" \
+            --output-format json \
+            --permission-mode dontAsk \
+            --tools "Read,Glob,Grep" \
+            --max-turns 8 \
+            "$(cat tests/live_assembly/interview_prompt.md)" \
+            > "$LIVE_INTERVIEW_JSON" 2> /tmp/live-interview.stderr
+          code=$?
+          echo "LIVE_INTERVIEW_EXIT=$code" >> "$GITHUB_ENV"
+
+          if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
+            echo "LIVE_INTERVIEW_DIRTY=1" >> "$GITHUB_ENV"
+          else
+            echo "LIVE_INTERVIEW_DIRTY=0" >> "$GITHUB_ENV"
+          fi
+          exit 0
+
+      - name: Stage 2 · resume session and assemble the employee
+        shell: bash
+        run: |
+          set +e
+          timeout --signal=TERM 1350s claude -p \
+            --resume "$LIVE_SESSION_ID" \
+            --model "$ANTHROPIC_MODEL" \
+            --output-format json \
+            --permission-mode dontAsk \
+            --tools "Read,Write,Edit,Glob,Grep,Bash" \
+            --allowedTools "Read" "Write" "Edit" "Glob" "Grep" "Bash(python *)" "Bash(python3 *)" \
+            --max-turns 40 \
+            "$(cat tests/live_assembly/assembly_answers.md)" \
+            > "$LIVE_ASSEMBLY_JSON" 2> /tmp/live-assembly.stderr
+          code=$?
+          echo "LIVE_ASSEMBLY_EXIT=$code" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Deterministically verify generated employee
+        shell: bash
+        run: |
+          set +e
+          python tools/verify_live_assembly.py
+          code=$?
+          echo "LIVE_VERIFY_EXIT=$code" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Publish live acceptance summary
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ.get("LIVE_ASSEMBLY_REPORT", "/tmp/live-assembly-report.json"))
+          print("# Live Digital Employee Assembly")
+          print()
+          print("**Agent:** Claude Code")
+          print("**Provider:** BigModel Anthropic-compatible API")
+          print("**Model:** `glm-5.3-flash`")
+          print()
+          if not path.exists():
+              print("❌ Verification report was not generated.")
+              raise SystemExit
+          report = json.loads(path.read_text(encoding="utf-8"))
+          print(f"## {'✅ PASSED' if report.get('overall_passed') else '❌ FAILED'}")
+          print()
+          print("| Check | Status | Evidence |")
+          print("|---|---:|---|")
+          for check in report.get("checks", []):
+              icon = "✅ PASS" if check.get("ok") else "❌ FAIL"
+              detail = str(check.get("detail", "")).replace("|", "\\|").replace("\n", " ")
+              print(f"| {check.get('name')} | {icon} | {detail} |")
+
+          print()
+          print("## Model execution metrics")
+          print()
+          print("| Stage | Duration | Turns | Claude Code cost estimate |")
+          print("|---|---:|---:|---:|")
+          for label, env_name in [
+              ("Interview", "LIVE_INTERVIEW_JSON"),
+              ("Assembly", "LIVE_ASSEMBLY_JSON"),
+          ]:
+              metric_path = Path(os.environ[env_name])
+              if not metric_path.exists():
+                  print(f"| {label} | n/a | n/a | n/a |")
+                  continue
+              data = json.loads(metric_path.read_text(encoding="utf-8"))
+              duration_s = float(data.get("duration_ms") or 0) / 1000
+              turns = data.get("num_turns", "n/a")
+              cost = data.get("total_cost_usd")
+              cost_text = f"${float(cost):.4f}" if cost is not None else "n/a"
+              print(f"| {label} | {duration_s:.1f}s | {turns} | {cost_text} |")
+          print()
+          print("> Cost is the estimate reported by Claude Code; provider billing is authoritative.")
+          PY
+
+      - name: Upload live assembly evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-digital-employee-assembly-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            /tmp/live-provider.json
+            /tmp/live-interview.json
+            /tmp/live-assembly.json
+            /tmp/live-assembly-report.json
+            generated/live_ci_employee.py
+            generated/live_ci_manifest.json
+            generated/live_ci_result.json
+            generated/live_ci_trace.json
+
+      - name: Enforce live acceptance verdict
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ.get("LIVE_ASSEMBLY_REPORT", "/tmp/live-assembly-report.json"))
+          if not path.exists():
+              raise SystemExit("live assembly verification report is missing")
+          report = json.loads(path.read_text(encoding="utf-8"))
+          if not report.get("overall_passed"):
+              raise SystemExit("live digital employee assembly acceptance failed")
+          PY

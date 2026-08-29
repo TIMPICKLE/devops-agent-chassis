@@ -358,7 +358,8 @@ if __name__ == "__main__":
     print("═" * 74)
     print("格子里是两个任务合计的模型调用次数，越少越省 token。")
     print()
-    header = f"{'内层模式 \\ 外层流程':<22}" + "".join(f"{f:<14}" for f, _ in FLOWS)
+    axis_label = "内层模式 \\ 外层流程"
+    header = f"{axis_label:<22}" + "".join(f"{f:<14}" for f, _ in FLOWS)
     print(header)
     print("─" * 62)
     for pat_name, make_pattern in PATTERNS:

@@ -1,0 +1,7 @@
+{
+  "id": "INC-001",
+  "service": "payments-api",
+  "error_rate": 0.42,
+  "customer_impact": true,
+  "summary": "Payment authorization requests are failing after a deployment."
+}

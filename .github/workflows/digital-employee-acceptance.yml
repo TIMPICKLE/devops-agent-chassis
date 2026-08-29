@@ -1,0 +1,134 @@
+name: Digital Employee Acceptance
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: digital-employee-acceptance-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  base-python39:
+    name: Base compatibility · Python 3.9
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.9"
+          cache: pip
+
+      - name: Install base project
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run base regression suite
+        run: python -m pytest tests/ -q
+
+  mcp-python310:
+    name: MCP minimum runtime · Python 3.10
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install MCP-enabled project
+        run: python -m pip install -e ".[mcp,dev]" uvicorn
+
+      - name: Verify MCP runtime and real transports
+        run: >-
+          python -m pytest
+          tests/test_mcp_runtime.py
+          tests/test_mcp_integration.py
+          -q
+
+  acceptance:
+    name: Digital Employee Acceptance Report
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install full acceptance environment
+        run: python -m pip install -e ".[mcp,dev]" uvicorn
+
+      - name: Run layered acceptance checks
+        id: acceptance
+        continue-on-error: true
+        run: >-
+          python tools/acceptance_report.py
+          --require-mcp
+          --output-dir reports/digital-employee-acceptance
+
+      - name: Publish acceptance summary
+        if: always()
+        shell: bash
+        run: |
+          SUMMARY="reports/digital-employee-acceptance/summary.md"
+          if [[ -f "$SUMMARY" ]]; then
+            cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "# Digital Employee Acceptance Report"
+              echo
+              echo "❌ Report generation crashed before summary.md was produced."
+              echo
+              echo "Inspect the 'Run layered acceptance checks' step log."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: digital-employee-acceptance-${{ github.run_id }}
+          path: reports/digital-employee-acceptance/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Enforce deterministic acceptance verdict
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("reports/digital-employee-acceptance/report.json")
+          if not path.exists():
+              raise SystemExit("acceptance report.json is missing")
+
+          report = json.loads(path.read_text(encoding="utf-8"))
+          if not report.get("overall_passed"):
+              failed = [
+                  check["label"]
+                  for check in report.get("checks", [])
+                  if check.get("required") and check.get("status") != "PASS"
+              ]
+              raise SystemExit("digital employee acceptance failed: " + ", ".join(failed))
+
+          print("Digital employee acceptance passed.")
+          PY
