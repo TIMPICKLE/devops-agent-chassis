@@ -1,4 +1,4 @@
-name: Live Digital Employee Assembly
+name: 数字员工真实装配验收 · Live Assembly
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   live-assembly:
-    name: Claude Code + GLM-5.3-Flash · Live Assembly
+    name: Claude Code + GLM-5.3-Flash · 真实装配
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -21,35 +21,41 @@ jobs:
       ANTHROPIC_BASE_URL: https://open.bigmodel.cn/api/anthropic
       ANTHROPIC_MODEL: glm-5.3-flash
       LIVE_PROVIDER_JSON: /tmp/live-provider.json
+      LIVE_INTERVIEW_STREAM: /tmp/live-interview.stream.jsonl
       LIVE_INTERVIEW_JSON: /tmp/live-interview.json
+      LIVE_INTERVIEW_PROCESS: /tmp/live-interview-process.json
+      LIVE_ASSEMBLY_STREAM: /tmp/live-assembly.stream.jsonl
       LIVE_ASSEMBLY_JSON: /tmp/live-assembly.json
+      LIVE_ASSEMBLY_PROCESS: /tmp/live-assembly-process.json
       LIVE_ASSEMBLY_REPORT: /tmp/live-assembly-report.json
+      LIVE_REPORT_MD: /tmp/live-assembly-report.md
+      LIVE_REPORT_HTML: /tmp/live-assembly-report.html
 
     steps:
-      - name: Checkout without write credentials
+      - name: 拉取工程（不保留写权限凭证）
         uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - name: Set up Python
+      - name: 配置 Python 3.13
         uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip
 
-      - name: Set up Node
+      - name: 配置 Node.js 22
         uses: actions/setup-node@v5
         with:
           node-version: "22"
 
-      - name: Install project and Claude Code
+      - name: 安装工程、MCP 与 Claude Code
         shell: bash
         run: |
           python -m pip install -e ".[mcp,dev]" uvicorn
           npm install --global @anthropic-ai/claude-code@latest
           claude --version
 
-      - name: Preflight GLM-5.3-Flash through BigModel Anthropic-compatible API
+      - name: 预检智谱 GLM-5.3-Flash 模型服务
         shell: bash
         run: |
           set +e
@@ -68,7 +74,7 @@ jobs:
           echo "LIVE_PROVIDER_EXIT=$code" >> "$GITHUB_ENV"
           exit 0
 
-      - name: Stage 1 · real Skill interview turn
+      - name: 第一阶段 · Skill 读取与真实需求访谈
         shell: bash
         run: |
           mkdir -p generated
@@ -83,15 +89,22 @@ jobs:
           timeout --signal=TERM 300s claude -p \
             --session-id "$SESSION_ID" \
             --model "$ANTHROPIC_MODEL" \
-            --output-format json \
+            --output-format stream-json \
+            --verbose \
             --permission-mode dontAsk \
             --tools "Read,Glob,Grep" \
             --max-turns 8 \
             "$(cat tests/live_assembly/interview_prompt.md)" \
-            > "$LIVE_INTERVIEW_JSON" 2> /tmp/live-interview.stderr
+            > "$LIVE_INTERVIEW_STREAM" 2> /tmp/live-interview.stderr
           code=$?
-          echo "LIVE_INTERVIEW_EXIT=$code" >> "$GITHUB_ENV"
 
+          python tools/claude_stream_capture.py \
+            --input "$LIVE_INTERVIEW_STREAM" \
+            --summary "$LIVE_INTERVIEW_JSON" \
+            --process "$LIVE_INTERVIEW_PROCESS" \
+            --exit-code "$code"
+
+          echo "LIVE_INTERVIEW_EXIT=$code" >> "$GITHUB_ENV"
           if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
             echo "LIVE_INTERVIEW_DIRTY=1" >> "$GITHUB_ENV"
           else
@@ -99,86 +112,65 @@ jobs:
           fi
           exit 0
 
-      - name: Stage 2 · resume session and assemble the employee
+      - name: 第二阶段 · 恢复会话并自动装配数字员工
         shell: bash
         run: |
           set +e
           timeout --signal=TERM 1350s claude -p \
             --resume "$LIVE_SESSION_ID" \
             --model "$ANTHROPIC_MODEL" \
-            --output-format json \
+            --output-format stream-json \
+            --verbose \
             --permission-mode dontAsk \
             --tools "Read,Write,Edit,Glob,Grep,Bash" \
             --allowedTools "Read" "Write" "Edit" "Glob" "Grep" "Bash(python *)" "Bash(python3 *)" \
             --max-turns 40 \
             "$(cat tests/live_assembly/assembly_answers.md)" \
-            > "$LIVE_ASSEMBLY_JSON" 2> /tmp/live-assembly.stderr
+            > "$LIVE_ASSEMBLY_STREAM" 2> /tmp/live-assembly.stderr
           code=$?
+
+          python tools/claude_stream_capture.py \
+            --input "$LIVE_ASSEMBLY_STREAM" \
+            --summary "$LIVE_ASSEMBLY_JSON" \
+            --process "$LIVE_ASSEMBLY_PROCESS" \
+            --exit-code "$code"
+
           echo "LIVE_ASSEMBLY_EXIT=$code" >> "$GITHUB_ENV"
           exit 0
 
-      - name: Deterministically verify generated employee
+      - name: 确定性验证生成的数字员工
         shell: bash
         run: |
           set +e
           python tools/verify_live_assembly.py
           code=$?
+          python tools/enforce_live_process_scope.py
+          scope_code=$?
+          if [[ "$scope_code" -ne 0 ]]; then
+            code="$scope_code"
+          fi
           echo "LIVE_VERIFY_EXIT=$code" >> "$GITHUB_ENV"
           exit 0
 
-      - name: Publish live acceptance summary
+      - name: 生成中文过程报告（Markdown + HTML）
         if: always()
         shell: bash
         run: |
-          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json
-          import os
-          from pathlib import Path
+          python tools/render_live_assembly_report.py
 
-          path = Path(os.environ.get("LIVE_ASSEMBLY_REPORT", "/tmp/live-assembly-report.json"))
-          print("# Live Digital Employee Assembly")
-          print()
-          print("**Agent:** Claude Code")
-          print("**Provider:** BigModel Anthropic-compatible API")
-          print("**Model:** `glm-5.3-flash`")
-          print()
-          if not path.exists():
-              print("❌ Verification report was not generated.")
-              raise SystemExit
-          report = json.loads(path.read_text(encoding="utf-8"))
-          print(f"## {'✅ PASSED' if report.get('overall_passed') else '❌ FAILED'}")
-          print()
-          print("| Check | Status | Evidence |")
-          print("|---|---:|---|")
-          for check in report.get("checks", []):
-              icon = "✅ PASS" if check.get("ok") else "❌ FAIL"
-              detail = str(check.get("detail", "")).replace("|", "\\|").replace("\n", " ")
-              print(f"| {check.get('name')} | {icon} | {detail} |")
+      - name: 发布中文验收摘要
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f "$LIVE_REPORT_MD" ]]; then
+            cat "$LIVE_REPORT_MD" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "# 数字员工真实装配验收报告" >> "$GITHUB_STEP_SUMMARY"
+            echo >> "$GITHUB_STEP_SUMMARY"
+            echo "❌ 中文报告未生成，请检查上一步日志。" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-          print()
-          print("## Model execution metrics")
-          print()
-          print("| Stage | Duration | Turns | Claude Code cost estimate |")
-          print("|---|---:|---:|---:|")
-          for label, env_name in [
-              ("Interview", "LIVE_INTERVIEW_JSON"),
-              ("Assembly", "LIVE_ASSEMBLY_JSON"),
-          ]:
-              metric_path = Path(os.environ[env_name])
-              if not metric_path.exists():
-                  print(f"| {label} | n/a | n/a | n/a |")
-                  continue
-              data = json.loads(metric_path.read_text(encoding="utf-8"))
-              duration_s = float(data.get("duration_ms") or 0) / 1000
-              turns = data.get("num_turns", "n/a")
-              cost = data.get("total_cost_usd")
-              cost_text = f"${float(cost):.4f}" if cost is not None else "n/a"
-              print(f"| {label} | {duration_s:.1f}s | {turns} | {cost_text} |")
-          print()
-          print("> Cost is the estimate reported by Claude Code; provider billing is authoritative.")
-          PY
-
-      - name: Upload live assembly evidence
+      - name: 上传完整装配与验收证据
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -187,15 +179,21 @@ jobs:
           retention-days: 14
           path: |
             /tmp/live-provider.json
+            /tmp/live-interview.stream.jsonl
             /tmp/live-interview.json
+            /tmp/live-interview-process.json
+            /tmp/live-assembly.stream.jsonl
             /tmp/live-assembly.json
+            /tmp/live-assembly-process.json
             /tmp/live-assembly-report.json
+            /tmp/live-assembly-report.md
+            /tmp/live-assembly-report.html
             generated/live_ci_employee.py
             generated/live_ci_manifest.json
             generated/live_ci_result.json
             generated/live_ci_trace.json
 
-      - name: Enforce live acceptance verdict
+      - name: 执行最终验收门禁
         if: always()
         shell: bash
         run: |

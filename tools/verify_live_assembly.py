@@ -20,6 +20,10 @@ INPUT = ROOT / "tests" / "live_assembly" / "incident.json"
 REPORT = Path(os.environ.get("LIVE_ASSEMBLY_REPORT", "/tmp/live-assembly-report.json"))
 INTERVIEW_JSON = Path(os.environ.get("LIVE_INTERVIEW_JSON", "/tmp/live-interview.json"))
 ASSEMBLY_JSON = Path(os.environ.get("LIVE_ASSEMBLY_JSON", "/tmp/live-assembly.json"))
+INTERVIEW_PROCESS = Path(os.environ.get("LIVE_INTERVIEW_PROCESS", "/tmp/live-interview-process.json"))
+ASSEMBLY_PROCESS = Path(os.environ.get("LIVE_ASSEMBLY_PROCESS", "/tmp/live-assembly-process.json"))
+INTERVIEW_STREAM = Path(os.environ.get("LIVE_INTERVIEW_STREAM", "/tmp/live-interview.stream.jsonl"))
+ASSEMBLY_STREAM = Path(os.environ.get("LIVE_ASSEMBLY_STREAM", "/tmp/live-assembly.stream.jsonl"))
 PROVIDER_JSON = Path(os.environ.get("LIVE_PROVIDER_JSON", "/tmp/live-provider.json"))
 
 
@@ -102,7 +106,30 @@ def main() -> int:
         interview_dirty == "0",
         "working tree stayed clean during the interview turn" if interview_dirty == "0" else "interview turn changed project files",
     )
+
+    interview_process = _read_json(INTERVIEW_PROCESS)
+    interview_events = interview_process.get("events") if isinstance(interview_process, dict) else None
+    interview_tools = interview_process.get("tool_count") if isinstance(interview_process, dict) else 0
+    interview_process_ok = isinstance(interview_events, list) and len(interview_events) > 0 and int(interview_tools or 0) > 0
+    _record(
+        checks,
+        "interview-process-captured",
+        interview_process_ok,
+        f"interview process events captured: events={len(interview_events) if isinstance(interview_events, list) else 0}, tools={int(interview_tools or 0)}",
+    )
+
     _record(checks, "claude-code-assembly-ran", assembly_exit == 0, f"Claude Code assembly exit={assembly_exit}")
+
+    assembly_process = _read_json(ASSEMBLY_PROCESS)
+    assembly_events = assembly_process.get("events") if isinstance(assembly_process, dict) else None
+    assembly_tools = assembly_process.get("tool_count") if isinstance(assembly_process, dict) else 0
+    assembly_process_ok = isinstance(assembly_events, list) and len(assembly_events) > 0 and int(assembly_tools or 0) > 0
+    _record(
+        checks,
+        "assembly-process-captured",
+        assembly_process_ok,
+        f"assembly process events captured: events={len(assembly_events) if isinstance(assembly_events, list) else 0}, tools={int(assembly_tools or 0)}",
+    )
 
     _record(checks, "employee-generated", EMPLOYEE.exists(), str(EMPLOYEE.relative_to(ROOT)))
     _record(checks, "manifest-generated", MANIFEST.exists(), str(MANIFEST.relative_to(ROOT)))
@@ -122,7 +149,19 @@ def main() -> int:
     )
 
     generated_files = [p for p in GENERATED.rglob("*") if p.is_file()] if GENERATED.exists() else []
-    evidence_files = generated_files + [p for p in (INTERVIEW_JSON, ASSEMBLY_JSON) if p.exists()]
+    process_evidence = [
+        p
+        for p in (
+            INTERVIEW_JSON,
+            ASSEMBLY_JSON,
+            INTERVIEW_PROCESS,
+            ASSEMBLY_PROCESS,
+            INTERVIEW_STREAM,
+            ASSEMBLY_STREAM,
+        )
+        if p.exists()
+    ]
+    evidence_files = generated_files + process_evidence
     leaked = [str(p if p.is_absolute() else p.relative_to(ROOT)) for p in evidence_files if _contains_secret(p, secret)] if secret else []
     _record(checks, "secret-not-persisted", not leaked, "no secret bytes found in generated/model-output evidence" if not leaked else ", ".join(leaked))
 

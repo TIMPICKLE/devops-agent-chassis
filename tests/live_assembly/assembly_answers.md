@@ -41,8 +41,10 @@
 绝对不能把真实 API Key 写进任何源码、JSON、Markdown、日志或生成物；只能保留环境变量名称。
 
 ## 权限与副作用
-- 只允许读 `tests/live_assembly/incident.json`；
-- 只允许写 `generated/live_ci_result.json`；
+- 数字员工运行时只允许读 `tests/live_assembly/incident.json`；
+- 数字员工运行时只允许写 `generated/live_ci_result.json` 与运行 Trace；
+- 装配阶段所有由 Claude Code `Write` / `Edit` 创建或修改的文件都必须位于本仓库 `generated/` 目录；
+- **不要写入 `~/.claude/`、Claude Code memory、HOME 下的任何记忆文件，或仓库 `generated/` 之外的任何路径**；本次 CI 是一次性验收，不需要保存会话记忆；
 - 不允许网络副作用、Git push、PR、issue/comment 等真实外部写操作。
 
 ## 强制交付契约
@@ -65,4 +67,4 @@
 - `connector`
 - `llm_provider`
 
-完成后请你自己运行生成的数字员工做 smoke test，并修复你发现的问题。不要修改 `src/agent_chassis/`、现有 payload、现有 Skill 或现有测试来让验收通过。
+完成后请你自己运行生成的数字员工做 smoke test，并修复你发现的问题。不要修改 `src/agent_chassis/`、现有 payload、现有 Skill 或现有测试来让验收通过。不要创建任何持久化 Claude memory；所有工程写入只允许发生在 `generated/`。
