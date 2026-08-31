@@ -1,0 +1,96 @@
+name: 发布 Live Assembly 在线报告
+
+on:
+  workflow_run:
+    workflows: ["数字员工真实装配验收 · Live Assembly"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages-live-assembly-report
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: 发布最新版验收报告到 GitHub Pages
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: 下载触发本次发布的 Live Assembly Artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: live-digital-employee-assembly-${{ github.event.workflow_run.id }}
+          path: ${{ runner.temp }}/live-artifact
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: 准备 GitHub Pages 静态站点
+        shell: bash
+        env:
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          SOURCE_RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+          site="${RUNNER_TEMP}/pages-site"
+          mkdir -p "$site"
+
+          report_html="$(find "${RUNNER_TEMP}/live-artifact" -type f -name 'live-assembly-report.html' -print -quit)"
+          report_md="$(find "${RUNNER_TEMP}/live-artifact" -type f -name 'live-assembly-report.md' -print -quit)"
+          report_json="$(find "${RUNNER_TEMP}/live-artifact" -type f -name 'live-assembly-report.json' -print -quit)"
+
+          if [[ -z "$report_html" ]]; then
+            echo "live-assembly-report.html not found in source artifact" >&2
+            exit 1
+          fi
+
+          cp "$report_html" "$site/index.html"
+          cp "$report_html" "$site/live-assembly-report.html"
+          [[ -n "$report_md" ]] && cp "$report_md" "$site/live-assembly-report.md"
+          [[ -n "$report_json" ]] && cp "$report_json" "$site/live-assembly-report.json"
+          touch "$site/.nojekyll"
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          site = Path(os.environ["RUNNER_TEMP"]) / "pages-site"
+          metadata = {
+              "source_workflow": "数字员工真实装配验收 · Live Assembly",
+              "source_run_id": os.environ["SOURCE_RUN_ID"],
+              "source_sha": os.environ["SOURCE_SHA"],
+              "source_run_url": os.environ["SOURCE_RUN_URL"],
+          }
+          (site / "latest.json").write_text(
+              json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          echo "Pages site files:"
+          find "$site" -maxdepth 1 -type f -printf '%f\n' | sort
+
+      - name: 配置 GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: 上传 GitHub Pages 发布包
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: ${{ runner.temp }}/pages-site
+
+      - name: 发布到 GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
