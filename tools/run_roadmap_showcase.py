@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT))
 from agent_chassis import Chassis, InjectionPoint as P, Outcome, borrowed_executor
 from agent_chassis.evidence import EvidenceObserver, assembly_manifest
 from agent_chassis.failure import ZeroSideEffectPolicy
-from agent_chassis.knowledge import SkillLibrary, SkillProvider, by_extension
+from agent_chassis.knowledge import SkillLibrary, SkillProvider, StaticKnowledge, by_extension
 from agent_chassis.orchestration import AgentStep, FnStep, NestedOrchestrator, ReActPattern, SingleAgentOrchestrator, StateMachineOrchestrator
 from adapters.anthropic_runtime import AnthropicDecider, ModelConfig
 from adapters.openai_runtime import OpenAIChatDecider
@@ -30,12 +30,21 @@ from adapters.runtime import DEFAULT_ENDPOINTS, RuntimeDecider
 from payloads.patch_showcase import Candidate, HeaderBuildCriteria, HeaderBuildSource, PythonNoneCriteria, PythonQualitySource, fixture_solution, patch_tools, submission_ready
 
 
+SCENARIOS = ("python_quality", "header_build")
+CONTEXT_POLICIES = ("routed", "full", "none")
+SKILL_CONTENT = {
+    "python-quality": "Use identity comparisons for None. Keep the public function signature and all other AST structure.",
+    "cpp-build": "Use a header path from the supplied inventory. Change only the include line; preserve the program body.",
+}
+
+
 def assemble(scenario, *, mode="live", flow="nested", config=None, code_ref="unknown", decider=None,
-             stop_policy="objective", protocol="anthropic"):
+             stop_policy="objective", protocol="anthropic", context_policy="routed"):
     factories = {"python_quality": (PythonQualitySource, PythonNoneCriteria),
                  "header_build": (HeaderBuildSource, HeaderBuildCriteria)}
     if (mode not in {"live", "offline"} or flow not in {"nested", "state_machine", "single_agent"}
-            or stop_policy not in {"objective", "model"} or protocol not in DEFAULT_ENDPOINTS):
+            or stop_policy not in {"objective", "model"} or protocol not in DEFAULT_ENDPOINTS
+            or context_policy not in CONTEXT_POLICIES):
         raise ValueError("Unsupported mode or flow")
     source_type, criteria_type = factories[scenario]
     source = source_type()
@@ -48,7 +57,7 @@ def assemble(scenario, *, mode="live", flow="nested", config=None, code_ref="unk
 
     def offline_decide(task, ctx, box):
         ctx.chassis.inject(P.BEFORE_EXECUTOR, task, ctx)
-        ctx.context_for("offline-fixture-replay", [P.BEFORE_EXECUTOR])
+        ctx.context_for("offline-fixture-replay", [P.BEFORE_EXECUTOR], max_chars=config.context_max_chars)
         if ctx.tool_calls:
             return "stop", "offline fixture replay complete (not a model call)", None
         return "call", "submit_source", {"content": fixture_solution(task)}
@@ -66,25 +75,67 @@ def assemble(scenario, *, mode="live", flow="nested", config=None, code_ref="unk
         orchestrator = StateMachineOrchestrator([AgentStep("work", pattern=pattern, toolbox=toolbox)])
     else:
         orchestrator = NestedOrchestrator([FnStep("work", lambda t, c: None)], toolbox, pattern, "work")
-    skills = SkillLibrary("", rules=[by_extension({".py": "python-quality", ".cpp": "cpp-build"})], inline={
-        "python-quality": "Use identity comparisons for None. Keep the public function signature and all other AST structure.",
-        "cpp-build": "Use a header path from the supplied inventory. Change only the include line; preserve the program body.",
-    })
+    skills = SkillLibrary("", rules=[by_extension({".py": "python-quality", ".cpp": "cpp-build"})], inline=SKILL_CONTENT)
+    providers = []
+    if context_policy == "routed":
+        providers = [SkillProvider(skills)]
+    elif context_policy == "full":
+        # Identical skill text and headers; full only adds the other skill.
+        providers = [StaticKnowledge(f"### 参考规范：{name}\n\n{body}", points=[P.BEFORE_EXECUTOR], name=name)
+                     for name, body in SKILL_CONTENT.items()]
     policy = ZeroSideEffectPolicy()
     policy.register_cleanup("discard-owned-candidate", candidate.cleanup)
     evidence = EvidenceObserver(code_ref=code_ref, mode=execution_mode)
     chassis = (Chassis("patch-showcase").with_orchestrator(orchestrator)
                .with_payload(source, criteria).with_boundary(boundary)
-               .with_knowledge(SkillProvider(skills)).with_failure_policy(policy).observe(evidence).build())
+               .with_knowledge(*providers).with_failure_policy(policy).observe(evidence).build())
     runtime = {"mode": execution_mode, "requested_mode": mode,
-               "stop_policy": stop_policy, "protocol": protocol,
+               "stop_policy": stop_policy, "protocol": protocol, "context_policy": context_policy, "flow": flow,
                "adapter": decider.adapter_name if isinstance(decider, RuntimeDecider) else
                           "fixture-replay" if decider is offline_decide else "custom-decider"}
-    if mode == "live":
-        runtime["config"] = asdict(config)  # Contains the ENV NAME, never its value.
+    runtime["config"] = asdict(config)  # Contains the ENV NAME, never its value.
     manifest = assembly_manifest(chassis.report(), runtime=runtime)
     evidence.assembly_id = manifest["content_id"]
     return chassis, candidate, evidence, manifest
+
+
+def source_revision():
+    revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
+    code_ref = revision.stdout.strip() if revision.returncode == 0 else "unknown"
+    dirty = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True)
+    return code_ref + ("+dirty" if dirty.stdout.strip() else "")
+
+
+def write_json(path, document):
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(document, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def execute_scenario(scenario, output, *, prefix=None, **assembly):
+    """Run one fresh assembly and persist its evidence, including failed verdicts."""
+    prefix = prefix or scenario
+    chassis, candidate, evidence, manifest = assemble(scenario, **assembly)
+    write_json(output / (prefix + ".manifest.json"), manifest)
+    print(f"Starting {prefix} ({manifest['runtime']['mode']})", flush=True)
+    try:
+        result = chassis.run_once()
+        evidence.dump(str(output / (prefix + ".evidence.json")))
+        if result.outcome is Outcome.SUCCEEDED:
+            (output / (prefix + ".patch")).write_text(candidate.patch(), encoding="utf-8")
+        run = evidence.runs[0]
+        case = {"scenario": scenario, "outcome": result.outcome.value,
+                "reason": result.verdict.reason if result.verdict else result.error,
+                "execution_mode": run["mode"], "model_calls": len(run["model_calls"]),
+                "stop_reason": run["stop_reason"], "usage": run["usage"], "input_id": run["input_id"],
+                "context_chars": sum(receipt["chars"] for receipt in run["context_receipts"]),
+                "elapsed_ms": run["elapsed_ms"], "manifest": prefix + ".manifest.json",
+                "evidence": prefix + ".evidence.json"}
+        print(f"Finished {prefix}: {case['outcome']}; model_calls={case['model_calls']}; "
+              f"stop={case['stop_reason']}; tokens={case['usage']['input_tokens']}/{case['usage']['output_tokens']}", flush=True)
+        return case
+    finally:
+        chassis.close()
 
 
 def add_model_arguments(parser):
@@ -112,6 +163,7 @@ def main(argv=None):
     parser.add_argument("--flow", choices=["nested", "state_machine", "single_agent"], default="nested")
     parser.add_argument("--scenario", choices=["all", "python_quality", "header_build"], default="all")
     parser.add_argument("--stop-policy", choices=["objective", "model"], default="objective")
+    parser.add_argument("--context-policy", choices=CONTEXT_POLICIES, default="routed")
     parser.add_argument("--output-dir", type=Path)
     add_model_arguments(parser)
     args = parser.parse_args(argv)
@@ -120,36 +172,16 @@ def main(argv=None):
     config = model_config(args)
     output = args.output_dir or ROOT / "reports" / ("roadmap-showcase-" + uuid.uuid4().hex[:10])
     output.mkdir(parents=True, exist_ok=False)
-    revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
-    code_ref = revision.stdout.strip() if revision.returncode == 0 else "unknown"
-    dirty = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True)
-    if dirty.stdout.strip():
-        code_ref += "+dirty"
-    scenarios = ["python_quality", "header_build"] if args.scenario == "all" else [args.scenario]
+    code_ref = source_revision()
+    scenarios = SCENARIOS if args.scenario == "all" else [args.scenario]
     summary = {"schema_version": "agent-chassis.showcase/v1", "mode": args.mode, "flow": args.flow,
                "code_ref": code_ref, "stop_policy": args.stop_policy, "protocol": args.protocol,
-               "cases": [], "is_benchmark": False}
+               "context_policy": args.context_policy, "cases": [], "is_benchmark": False}
     for scenario in scenarios:
-        print(f"Starting {scenario} ({args.mode}, {args.stop_policy})", flush=True)
-        chassis, candidate, evidence, manifest = assemble(scenario, mode=args.mode, flow=args.flow,
-                                                         config=config, code_ref=code_ref, stop_policy=args.stop_policy,
-                                                         protocol=args.protocol)
-        try:
-            result = chassis.run_once()
-            evidence.dump(str(output / (scenario + ".evidence.json")))
-            (output / (scenario + ".manifest.json")).write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            if result.outcome is Outcome.SUCCEEDED:
-                (output / (scenario + ".patch")).write_text(candidate.patch(), encoding="utf-8")
-            summary["cases"].append({"scenario": scenario, "outcome": result.outcome.value,
-                                     "reason": result.verdict.reason if result.verdict else result.error,
-                                     "model_calls": len(evidence.runs[0]["model_calls"]),
-                                     "stop_reason": evidence.runs[0]["stop_reason"],
-                                     "usage": evidence.runs[0]["usage"],
-                                     "evidence": scenario + ".evidence.json"})
-            print(f"Finished {scenario}: {result.outcome.value}; model_calls={summary['cases'][-1]['model_calls']}; "
-                  f"stop={summary['cases'][-1]['stop_reason']}", flush=True)
-        finally:
-            chassis.close()
+        summary["cases"].append(execute_scenario(scenario, output, mode=args.mode, flow=args.flow,
+            config=config, code_ref=code_ref, stop_policy=args.stop_policy, protocol=args.protocol,
+            context_policy=args.context_policy))
+        write_json(output / "summary.json", summary)
     summary["all_passed"] = all(case["outcome"] == "succeeded" for case in summary["cases"])
     (output / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     label = "真实模型运行" if args.mode == "live" else "离线合同回放（不是 AI 实测）"
