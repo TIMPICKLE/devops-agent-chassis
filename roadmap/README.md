@@ -16,6 +16,7 @@
 阅读入口：
 
 - [IMPLEMENTATION.md](./IMPLEMENTATION.md)：实际实现、验证记录、参赛展示入口与剩余工作
+- [VALIDATION.md](./VALIDATION.md)：已完成的本地 / Actions / 真实模型验证及代码快照
 - [CURRENT_STATE.md](./CURRENT_STATE.md)：已核实事实、两个最小复现、尚未验证的边界
 - [BACKLOG.md](./BACKLOG.md)：8 个近期任务、依赖、验收门槛与条件性扩展
 - [RESEARCH.md](./RESEARCH.md)：公平横向比较、评测设计、标准依据与适用限制
