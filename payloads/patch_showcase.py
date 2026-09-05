@@ -168,12 +168,22 @@ def patch_tools(candidate, criteria, task, boundary):
             raise ValueError("Candidate must be a string of at most 20000 characters")
         candidate.content = content if content.endswith("\n") else content + "\n"
         verdict = criteria.validate(task)
-        return {"accepted": verdict.done, "reason": verdict.reason}
+        return {"accepted": verdict.done, "reason": verdict.reason,
+                "candidate_sha256": candidate.digests()["candidate_sha256"]}
 
     return ToolBox().add("submit_source", submit_source, input_schema={
         "type": "object", "properties": {"content": {"type": "string", "maxLength": 20000}},
         "required": ["content"], "additionalProperties": False,
     })
+
+
+def submission_ready(candidate, ctx):
+    """A current artifact passed tool-side checks; final DoneCriteria still runs."""
+    result = ctx.facts.get("tool_results", {}).get("submit_source", {})
+    if (candidate.content is not None and result.get("accepted") is True and
+            result.get("candidate_sha256") == candidate.digests()["candidate_sha256"]):
+        return "Submitted candidate passed objective checks"
+    return None
 
 
 def fixture_solution(task):

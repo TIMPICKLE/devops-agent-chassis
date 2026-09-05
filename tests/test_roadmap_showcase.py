@@ -111,8 +111,11 @@ def test_native_adapter_full_assembly_uses_observations_and_independent_verdict(
     try:
         result = chassis.run_once()
         assert result.outcome is (Outcome.SUCCEEDED if valid_patch else Outcome.FAILED)
-        assert len(requests) == 2
-        assert evidence.runs[0]["usage"] == {"complete": True, "input_tokens": 50, "output_tokens": 15}
+        assert len(requests) == (1 if valid_patch else 2)
+        assert evidence.runs[0]["usage"] == {"complete": True, "input_tokens": 20 if valid_patch else 50,
+                                             "output_tokens": 10 if valid_patch else 15}
+        if valid_patch:
+            assert evidence.runs[0]["stop_reason"] == "objective_stop"
         assert evidence.runs[0]["mode"] == manifest["runtime"]["mode"] == "test-transport"
         assert "test-only-canary" not in json.dumps(evidence.snapshot())
         if not valid_patch:

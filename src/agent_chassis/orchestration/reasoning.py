@@ -163,10 +163,18 @@ class ReActPattern(ReasoningPattern):
         decide: Decide,
         max_iterations: int = 8,
         executor_tools: Sequence[str] = (),
+        *,
+        stop_when: Optional[Callable[[Task, RunContext], Optional[str]]] = None,
     ) -> None:
         self.decide = decide
         self.max_iterations = max_iterations
         self.executor_tools = list(executor_tools)
+        # 可选的客观停止信号只结束推理；不会替代 Chassis 的最终验收。
+        self.stop_when = stop_when
+
+    def describe(self) -> str:
+        description = super().describe()
+        return description + ("；支持客观检查后停止" if self.stop_when is not None else "")
 
     def reason(self, task: Task, ctx: RunContext, toolbox: Any) -> None:
         for _ in range(self.max_iterations):
@@ -179,6 +187,14 @@ class ReActPattern(ReasoningPattern):
             if action != "call":
                 raise ValueError(f"未知 ReAct 动作：{action!r}")
             invoke_tool(toolbox, target, kwargs or {}, task, ctx, self.executor_tools)
+            if self.stop_when is not None:
+                reason = self.stop_when(task, ctx)
+                if reason is not None:
+                    if not isinstance(reason, str) or not reason:
+                        raise ValueError("stop_when 必须返回非空原因字符串或 None")
+                    ctx.facts["stop_reason"] = "objective_stop"
+                    ctx.note(f"[ReAct] 客观检查要求停止推理：{reason}；继续最终验收")
+                    return
         ctx.facts["stop_reason"] = "iteration_limit"
         ctx.note(f"[ReAct] 达到迭代上限 {self.max_iterations}；是否成功仍由完成判据决定")
 

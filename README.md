@@ -12,6 +12,8 @@
 
 ### Roadmap 实现分支
 
+**快速了解每阶段变更：[变更概览](changelog/README.md)**。每实现一项功能，会记录它带来的变化、使用入口、实际测试结果和限制；当前第二阶段见 [阶段变更](changelog/stage-02.md)。
+
 首批实现增加了**上下文消费回执、运行期模型适配器、版本化运行证据**，以及共享装配代码的 Python 质量修复 / C++ 构建修复两个参考载荷。两种载荷支持切换三种编排。详见 [实施进度与复现命令](roadmap/IMPLEMENTATION.md)；完整规划见 [Roadmap](roadmap/README.md)。
 
 ```bash

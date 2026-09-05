@@ -25,13 +25,15 @@ from agent_chassis.failure import ZeroSideEffectPolicy
 from agent_chassis.knowledge import SkillLibrary, SkillProvider, by_extension
 from agent_chassis.orchestration import AgentStep, FnStep, NestedOrchestrator, ReActPattern, SingleAgentOrchestrator, StateMachineOrchestrator
 from adapters.anthropic_runtime import AnthropicDecider, ModelConfig
-from payloads.patch_showcase import Candidate, HeaderBuildCriteria, HeaderBuildSource, PythonNoneCriteria, PythonQualitySource, fixture_solution, patch_tools
+from payloads.patch_showcase import Candidate, HeaderBuildCriteria, HeaderBuildSource, PythonNoneCriteria, PythonQualitySource, fixture_solution, patch_tools, submission_ready
 
 
-def assemble(scenario, *, mode="live", flow="nested", config=None, code_ref="unknown", decider=None):
+def assemble(scenario, *, mode="live", flow="nested", config=None, code_ref="unknown", decider=None,
+             stop_policy="objective"):
     factories = {"python_quality": (PythonQualitySource, PythonNoneCriteria),
                  "header_build": (HeaderBuildSource, HeaderBuildCriteria)}
-    if mode not in {"live", "offline"} or flow not in {"nested", "state_machine", "single_agent"}:
+    if (mode not in {"live", "offline"} or flow not in {"nested", "state_machine", "single_agent"}
+            or stop_policy not in {"objective", "model"}):
         raise ValueError("Unsupported mode or flow")
     source_type, criteria_type = factories[scenario]
     source = source_type()
@@ -53,7 +55,8 @@ def assemble(scenario, *, mode="live", flow="nested", config=None, code_ref="unk
         decider = offline_decide if mode == "offline" else AnthropicDecider(config, tool_names=toolbox.names())
     execution_mode = ("offline-contract" if decider is offline_decide else
                       decider.execution_mode if isinstance(decider, AnthropicDecider) else "test-decider")
-    pattern = ReActPattern(decider, max_iterations=config.max_calls)
+    pattern = ReActPattern(decider, max_iterations=config.max_calls,
+                          stop_when=(lambda t, c: submission_ready(candidate, c)) if stop_policy == "objective" else None)
     if flow == "single_agent":
         orchestrator = SingleAgentOrchestrator(toolbox, pattern)
     elif flow == "state_machine":
@@ -71,6 +74,7 @@ def assemble(scenario, *, mode="live", flow="nested", config=None, code_ref="unk
                .with_payload(source, criteria).with_boundary(boundary)
                .with_knowledge(SkillProvider(skills)).with_failure_policy(policy).observe(evidence).build())
     runtime = {"mode": execution_mode, "requested_mode": mode,
+               "stop_policy": stop_policy,
                "adapter": "anthropic-messages" if isinstance(decider, AnthropicDecider) else
                           "fixture-replay" if decider is offline_decide else "custom-decider"}
     if mode == "live":
@@ -85,6 +89,7 @@ def main(argv=None):
     parser.add_argument("--mode", choices=["live", "offline"], default="live")
     parser.add_argument("--flow", choices=["nested", "state_machine", "single_agent"], default="nested")
     parser.add_argument("--scenario", choices=["all", "python_quality", "header_build"], default="all")
+    parser.add_argument("--stop-policy", choices=["objective", "model"], default="objective")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--model", default=os.environ.get("ANTHROPIC_MODEL", "glm-5.3-flash"))
     parser.add_argument("--base-url", default=os.environ.get("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic"))
@@ -101,10 +106,11 @@ def main(argv=None):
         code_ref += "+dirty"
     scenarios = ["python_quality", "header_build"] if args.scenario == "all" else [args.scenario]
     summary = {"schema_version": "agent-chassis.showcase/v1", "mode": args.mode, "flow": args.flow,
-               "code_ref": code_ref, "cases": [], "is_benchmark": False}
+               "code_ref": code_ref, "stop_policy": args.stop_policy, "cases": [], "is_benchmark": False}
     for scenario in scenarios:
+        print(f"Starting {scenario} ({args.mode}, {args.stop_policy})", flush=True)
         chassis, candidate, evidence, manifest = assemble(scenario, mode=args.mode, flow=args.flow,
-                                                         config=config, code_ref=code_ref)
+                                                         config=config, code_ref=code_ref, stop_policy=args.stop_policy)
         try:
             result = chassis.run_once()
             evidence.dump(str(output / (scenario + ".evidence.json")))
@@ -114,14 +120,19 @@ def main(argv=None):
             summary["cases"].append({"scenario": scenario, "outcome": result.outcome.value,
                                      "reason": result.verdict.reason if result.verdict else result.error,
                                      "model_calls": len(evidence.runs[0]["model_calls"]),
+                                     "stop_reason": evidence.runs[0]["stop_reason"],
+                                     "usage": evidence.runs[0]["usage"],
                                      "evidence": scenario + ".evidence.json"})
+            print(f"Finished {scenario}: {result.outcome.value}; model_calls={summary['cases'][-1]['model_calls']}; "
+                  f"stop={summary['cases'][-1]['stop_reason']}", flush=True)
         finally:
             chassis.close()
     summary["all_passed"] = all(case["outcome"] == "succeeded" for case in summary["cases"])
     (output / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     label = "真实模型运行" if args.mode == "live" else "离线合同回放（不是 AI 实测）"
-    lines = ["# Roadmap Showcase", "", label, "", "| 场景 | 结果 | 模型调用 |", "|---|---|---:|"]
-    lines += [f'| {case["scenario"]} | {case["outcome"]} | {case["model_calls"]} |' for case in summary["cases"]]
+    lines = ["# Roadmap Showcase", "", label, "", "| 场景 | 结果 | 模型调用 | 停止原因 | 输入 / 输出 token |", "|---|---|---:|---|---|"]
+    lines += [f'| {case["scenario"]} | {case["outcome"]} | {case["model_calls"]} | {case["stop_reason"]} | '
+              f'{case["usage"]["input_tokens"]} / {case["usage"]["output_tokens"]} |' for case in summary["cases"]]
     lines += ["", "只验证两个公开窄场景，不是生产基准或竞品优劣结论。", ""]
     (output / "summary.md").write_text("\n".join(lines), encoding="utf-8")
     print("\n".join(lines))
