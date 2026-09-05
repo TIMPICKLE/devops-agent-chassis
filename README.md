@@ -10,6 +10,18 @@
 
 载荷回答的是剩下的两个问题：任务从哪来，怎么算做完。
 
+### Roadmap 实现分支
+
+首批实现增加了**上下文消费回执、运行期模型适配器、版本化运行证据**，以及共享装配代码的 Python 质量修复 / C++ 构建修复两个参考载荷。两种载荷支持切换三种编排。详见 [实施进度与复现命令](roadmap/IMPLEMENTATION.md)；完整规划见 [Roadmap](roadmap/README.md)。
+
+```bash
+python -m pip install -e ".[dev,llm]"
+python tools/run_roadmap_showcase.py --mode offline --output-dir reports/roadmap-showcase-demo
+python tools/verify_roadmap_evidence.py reports/roadmap-showcase-demo
+```
+
+上述命令是**离线合同回放，不是 AI 实测或生产评测**。运行期真实模型需使用 `--mode live`，通过环境变量提供 `BIGMODEL_API_KEY`，并另行留存 live 证据。这里只输出本地 patch，不创建业务 PR 或发布变更。
+
 ```
 底盘 Chassis（本仓库）              载荷 Payload（业务方提供）
 ├─ ① 🧭 编排契约  Orchestrator       ├─ 📥 TaskSource    任务从哪来
@@ -64,7 +76,7 @@ python examples/05_permissions_and_failure.py  # 能力借来，权限不借
 | `PlanExecutePattern` | 计划是显式产物可被审查，**每步再问一次**，失败可重规划 | token 接近 ReAct |
 | `PlanAndSolvePattern` | **一次调用**出计划即答案，执行期不再问 | 无重规划，计划错了就错到底 |
 | `ReWOOPattern` | 计划带 `#E1` 证据变量表达依赖，执行后 Solver 汇总 | 固定两次调用，中途不能调整 |
-| `LLMCompilerPattern` | 编译成带依赖的 **DAG**，无依赖节点并行成波，Joiner 决定收工或重编译 | 规划器得能写对依赖 |
+| `LLMCompilerPattern` | 编译成带依赖的 **DAG**，按依赖分波；当前实现波内仍串行，Joiner 决定收工或重编译 | 真正并发尚待实现与测量 |
 | `BasicReflectionPattern` | **装饰器**：生成→自评→重生成，固定轮数，反思用完即弃 | 评价者就是模型自己 |
 | `ReflexionPattern` | **装饰器**：外部评估器判定，反思累积成情景记忆 | 最贵 |
 
@@ -96,7 +108,7 @@ chassis.with_orchestrator(
 ```
 
 `examples/01` 分三部分证明两轴正交：固定内层换外层、固定外层换内层，
-最后把 7 × 3 全矩阵**真的各跑一遍**，打出每一格的模型调用次数：
+最后把 7 × 3 全矩阵**以确定性回调各跑一遍**，打出每一格的模拟决策调用次数；不是远端模型调用或真实 token 账单：
 
 ```
 内层模式 \ 外层流程     线性状态机      单 Agent      分层子图
@@ -109,8 +121,7 @@ Basic Reflection      12            12            12
 Reflexion             10            10            10
 ```
 
-💸 这张表里最值得看的是 Basic Reflection 的 12：它比裸 ReAct 多花了两次调用，
-却因为看不到客观事实而没改变任何结果。反思不是免费的。
+这张表说明示例控制流的调用差异；它不能单独证明某种模式在真实模型上的效果或成本。生产模式选型需同条件 live 对照。
 
 **关于工作流引擎**：线性五阶段只有一条主路径和一条失败短路，没有分支、并发、循环。
 这种形状引入引擎不产生收益，只多一层需要理解和调试的抽象。所以 `StateMachineOrchestrator`

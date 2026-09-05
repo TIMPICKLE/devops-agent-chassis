@@ -1,0 +1,119 @@
+name: Roadmap Showcase · Contracts and Portable Evidence
+
+on:
+  push:
+    branches: ["feat/roadmap-**"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      live:
+        description: "Run paid live model verification after contracts pass"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: roadmap-showcase-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract-matrix:
+    name: Contracts and 2 payloads × 3 flows · Python ${{ matrix.python-version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install core and optional model adapter tests
+        run: python -m pip install -e ".[dev,llm]"
+      - name: Install optional MCP transport tests
+        if: matrix.python-version == '3.13'
+        run: python -m pip install -e ".[mcp]" uvicorn
+      - name: Run regression suite (no model keys)
+        run: python -m pytest tests/ -q
+      - name: Exercise the reuse matrix and validate portable reports
+        shell: bash
+        run: |
+          for flow in nested state_machine single_agent; do
+            python tools/run_roadmap_showcase.py --mode offline --flow "$flow" --output-dir "reports/roadmap-showcase/$flow"
+            python tools/verify_roadmap_evidence.py "reports/roadmap-showcase/$flow"
+          done
+      - name: Publish clearly labelled offline summaries
+        if: always()
+        shell: bash
+        run: |
+          for flow in nested state_machine single_agent; do
+            summary="reports/roadmap-showcase/$flow/summary.md"
+            if [[ -f "$summary" ]]; then
+              printf '\n## %s\n\n' "$flow" >> "$GITHUB_STEP_SUMMARY"
+              cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+      - name: Upload contracts, patches and evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: roadmap-contracts-py${{ matrix.python-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/roadmap-showcase/
+          if-no-files-found: warn
+          retention-days: 14
+
+  live-runtime:
+    needs: contract-matrix
+    if: >-
+      github.repository == 'TIMPICKLE/devops-agent-chassis' &&
+      ((github.event_name == 'workflow_dispatch' && inputs.live) ||
+       (github.event_name == 'push' && contains(github.event.head_commit.message, '[roadmap-live]')))
+    name: Explicit opt-in · real model + two payloads
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install reference model adapter
+        run: python -m pip install -e ".[llm]"
+      - name: Run real model decisions and independent validators
+        env:
+          BIGMODEL_API_KEY: ${{ secrets.BIGMODEL_API_KEY }}
+          ANTHROPIC_BASE_URL: https://open.bigmodel.cn/api/anthropic
+          ANTHROPIC_MODEL: glm-5.3-flash
+        run: >-
+          python tools/run_roadmap_showcase.py --mode live
+          --output-dir reports/roadmap-showcase-live
+      - name: Validate live evidence contract
+        if: always()
+        run: python tools/verify_roadmap_evidence.py reports/roadmap-showcase-live --require-live
+      - name: Publish runtime summary
+        if: always()
+        shell: bash
+        run: |
+          summary="reports/roadmap-showcase-live/summary.md"
+          if [[ -f "$summary" ]]; then
+            cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Runtime evidence missing; live validation did not complete. Check the model Secret and run logs." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: roadmap-live-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/roadmap-showcase-live/
+          if-no-files-found: warn
+          retention-days: 14
