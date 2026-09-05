@@ -25,15 +25,17 @@ from agent_chassis.failure import ZeroSideEffectPolicy
 from agent_chassis.knowledge import SkillLibrary, SkillProvider, by_extension
 from agent_chassis.orchestration import AgentStep, FnStep, NestedOrchestrator, ReActPattern, SingleAgentOrchestrator, StateMachineOrchestrator
 from adapters.anthropic_runtime import AnthropicDecider, ModelConfig
+from adapters.openai_runtime import OpenAIChatDecider
+from adapters.runtime import DEFAULT_ENDPOINTS, RuntimeDecider
 from payloads.patch_showcase import Candidate, HeaderBuildCriteria, HeaderBuildSource, PythonNoneCriteria, PythonQualitySource, fixture_solution, patch_tools, submission_ready
 
 
 def assemble(scenario, *, mode="live", flow="nested", config=None, code_ref="unknown", decider=None,
-             stop_policy="objective"):
+             stop_policy="objective", protocol="anthropic"):
     factories = {"python_quality": (PythonQualitySource, PythonNoneCriteria),
                  "header_build": (HeaderBuildSource, HeaderBuildCriteria)}
     if (mode not in {"live", "offline"} or flow not in {"nested", "state_machine", "single_agent"}
-            or stop_policy not in {"objective", "model"}):
+            or stop_policy not in {"objective", "model"} or protocol not in DEFAULT_ENDPOINTS):
         raise ValueError("Unsupported mode or flow")
     source_type, criteria_type = factories[scenario]
     source = source_type()
@@ -42,7 +44,7 @@ def assemble(scenario, *, mode="live", flow="nested", config=None, code_ref="unk
     criteria = criteria_type(candidate)
     boundary = borrowed_executor("patch-executor")
     toolbox = patch_tools(candidate, criteria, task, boundary)
-    config = config if config is not None else ModelConfig(model="glm-5.3-flash")
+    config = config if config is not None else ModelConfig(model="glm-5.3-flash", base_url=DEFAULT_ENDPOINTS[protocol])
 
     def offline_decide(task, ctx, box):
         ctx.chassis.inject(P.BEFORE_EXECUTOR, task, ctx)
@@ -52,9 +54,10 @@ def assemble(scenario, *, mode="live", flow="nested", config=None, code_ref="unk
         return "call", "submit_source", {"content": fixture_solution(task)}
 
     if decider is None:
-        decider = offline_decide if mode == "offline" else AnthropicDecider(config, tool_names=toolbox.names())
+        adapter = AnthropicDecider if protocol == "anthropic" else OpenAIChatDecider
+        decider = offline_decide if mode == "offline" else adapter(config, tool_names=toolbox.names())
     execution_mode = ("offline-contract" if decider is offline_decide else
-                      decider.execution_mode if isinstance(decider, AnthropicDecider) else "test-decider")
+                      decider.execution_mode if isinstance(decider, RuntimeDecider) else "test-decider")
     pattern = ReActPattern(decider, max_iterations=config.max_calls,
                           stop_when=(lambda t, c: submission_ready(candidate, c)) if stop_policy == "objective" else None)
     if flow == "single_agent":
@@ -74,14 +77,33 @@ def assemble(scenario, *, mode="live", flow="nested", config=None, code_ref="unk
                .with_payload(source, criteria).with_boundary(boundary)
                .with_knowledge(SkillProvider(skills)).with_failure_policy(policy).observe(evidence).build())
     runtime = {"mode": execution_mode, "requested_mode": mode,
-               "stop_policy": stop_policy,
-               "adapter": "anthropic-messages" if isinstance(decider, AnthropicDecider) else
+               "stop_policy": stop_policy, "protocol": protocol,
+               "adapter": decider.adapter_name if isinstance(decider, RuntimeDecider) else
                           "fixture-replay" if decider is offline_decide else "custom-decider"}
     if mode == "live":
         runtime["config"] = asdict(config)  # Contains the ENV NAME, never its value.
     manifest = assembly_manifest(chassis.report(), runtime=runtime)
     evidence.assembly_id = manifest["content_id"]
     return chassis, candidate, evidence, manifest
+
+
+def add_model_arguments(parser):
+    parser.add_argument("--protocol", choices=list(DEFAULT_ENDPOINTS), default="anthropic")
+    parser.add_argument("--model")
+    parser.add_argument("--base-url")
+    parser.add_argument("--api-key-env", default="BIGMODEL_API_KEY")
+    parser.add_argument("--max-calls", type=int, default=8)
+    parser.add_argument("--max-tokens", type=int, default=2048)
+    parser.add_argument("--context-max-chars", type=int, default=12000)
+    parser.add_argument("--timeout", type=float, default=60.0)
+
+
+def model_config(args):
+    prefix = args.protocol.upper()
+    return ModelConfig(model=args.model or os.environ.get(prefix + "_MODEL", "glm-5.3-flash"),
+                       base_url=args.base_url or os.environ.get(prefix + "_BASE_URL", DEFAULT_ENDPOINTS[args.protocol]),
+                       api_key_env=args.api_key_env, max_calls=args.max_calls, max_tokens=args.max_tokens,
+                       timeout=args.timeout, context_max_chars=args.context_max_chars)
 
 
 def main(argv=None):
@@ -91,12 +113,11 @@ def main(argv=None):
     parser.add_argument("--scenario", choices=["all", "python_quality", "header_build"], default="all")
     parser.add_argument("--stop-policy", choices=["objective", "model"], default="objective")
     parser.add_argument("--output-dir", type=Path)
-    parser.add_argument("--model", default=os.environ.get("ANTHROPIC_MODEL", "glm-5.3-flash"))
-    parser.add_argument("--base-url", default=os.environ.get("ANTHROPIC_BASE_URL", "https://open.bigmodel.cn/api/anthropic"))
+    add_model_arguments(parser)
     args = parser.parse_args(argv)
-    if args.mode == "live" and not os.environ.get("BIGMODEL_API_KEY"):
-        parser.error("BIGMODEL_API_KEY is missing. Live mode will NOT fall back to a fixture.")
-    config = ModelConfig(model=args.model, base_url=args.base_url)
+    if args.mode == "live" and not os.environ.get(args.api_key_env):
+        parser.error(f"{args.api_key_env} is missing. Live mode will NOT fall back to a fixture.")
+    config = model_config(args)
     output = args.output_dir or ROOT / "reports" / ("roadmap-showcase-" + uuid.uuid4().hex[:10])
     output.mkdir(parents=True, exist_ok=False)
     revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
@@ -106,11 +127,13 @@ def main(argv=None):
         code_ref += "+dirty"
     scenarios = ["python_quality", "header_build"] if args.scenario == "all" else [args.scenario]
     summary = {"schema_version": "agent-chassis.showcase/v1", "mode": args.mode, "flow": args.flow,
-               "code_ref": code_ref, "stop_policy": args.stop_policy, "cases": [], "is_benchmark": False}
+               "code_ref": code_ref, "stop_policy": args.stop_policy, "protocol": args.protocol,
+               "cases": [], "is_benchmark": False}
     for scenario in scenarios:
         print(f"Starting {scenario} ({args.mode}, {args.stop_policy})", flush=True)
         chassis, candidate, evidence, manifest = assemble(scenario, mode=args.mode, flow=args.flow,
-                                                         config=config, code_ref=code_ref, stop_policy=args.stop_policy)
+                                                         config=config, code_ref=code_ref, stop_policy=args.stop_policy,
+                                                         protocol=args.protocol)
         try:
             result = chassis.run_once()
             evidence.dump(str(output / (scenario + ".evidence.json")))
