@@ -6,9 +6,11 @@
 
 | 功能 | 你能直接得到什么 | 当前状态 |
 |---|---|---|
-| S2-01 客观检查后及时停止 | 补丁通过提交检查后结束推理，避免继续重复调用；最终验收照常执行 | 本地 40 项相关测试通过；live 待本阶段集成验证 |
-| S2-02 模型协议互换 | 用相同任务/工具/判据切换 Anthropic 和 OpenAI 兼容接口 | 本地相关测试累计 62 项通过；live 待集成验证 |
-| S2-03 上下文对照实验 | 一键比较按需、全量、不注入三种策略；输出调用量、token、验收结果 | 已实现；本地回归通过，Actions / live 集成验证中 |
+| S2-01 客观检查后及时停止 | 补丁通过提交检查后结束推理，避免继续重复调用；最终验收照常执行 | CI / live 通过；本轮 10 个任务均一次请求后客观停止 |
+| S2-02 模型协议互换 | 用相同任务/工具/判据切换 Anthropic 和 OpenAI 兼容接口 | CI / live 通过；两种协议各 2/2 验收通过 |
+| S2-03 上下文对照实验 | 一键比较按需、全量、不注入三种策略；输出调用量、token、验收结果 | CI / live 通过；6/6 试次完成，报告经独立核验 |
+
+**本阶段已完成：160 项完整回归通过，真实模型 10/10 任务通过，共 10 次请求。** 三种上下文策略在这两个简单任务上均成功，不能据此宣称注入知识提高了成功率。详细实测见本文最后一节。
 
 ## S2-01 · 客观检查后及时停止
 
@@ -64,7 +66,7 @@ python tools/verify_context_experiment.py reports/roadmap-showcase-ablation-live
 
 本地离线实验 6/6 验收通过。单轮知识字符合计 `routed=246`、`full=496`、`none=0`，只证明实际注入量不同；离线 token 保持未知，不能用这些字符数代替真实 token 费用。
 
-测试覆盖两种协议实际请求的上下文差异、相同任务输入、失败及预算耗尽、不完整报告、汇总与证据不一致。实际 live 结果在下方追加，不用离线回放代替。
+测试覆盖两种协议实际请求的上下文差异、相同任务输入、失败及预算耗尽、不完整报告、汇总与证据不一致。实际 live 结果见下方，离线回放另行标记。
 
 ## Actions 与本阶段验证
 
@@ -72,4 +74,49 @@ python tools/verify_context_experiment.py reports/roadmap-showcase-ablation-live
 
 显式 `live=true` 或提交信息 `[roadmap-live]` 才运行付费模型验证：两种协议各两个场景，单场景最多 4 次请求；另运行 6 试次上下文实验，最多 24 次请求。整项 live job 最多 **40 次模型请求**，使用已有 `BIGMODEL_API_KEY` Secret，不自动重试服务失败。每组报告均独立留存，验证器重新核对实际调用与用量。
 
-本地完整回归：`python -m pytest tests/ -q`，**160 passed**（Python 3.12，包含 MCP 传输测试）。CI / live 最终结果待本阶段集成运行后在此追加。没有将本阶段完成等同于整个 Roadmap 完成：B03/B06 的开发对照链路得到补齐，代表性保留集、企业任务迁移成本和与脚本方案的公平对照仍是后续工作。
+本地完整回归：`python -m pytest tests/ -q`，**160 passed**（Python 3.12，包含 MCP 传输测试）。[本阶段 Actions](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/33969106344) 测试源提交：`08d43fb6b76b6c831ce8ea1435646a3661d5a642`。
+
+| 验证层次 | 实际结果 |
+|---|---|
+| 本地 Python 3.12 | 160 passed，包含 MCP stdio / HTTP 传输测试 |
+| Actions Python 3.13 | 160 passed；6 个离线复用案例及 6 试次上下文实验均通过验收和证据核验 |
+| Actions Python 3.9 | 158 passed、1 skipped（该版本未安装可选 MCP 传输依赖）；相同离线矩阵与实验通过 |
+
+没有将本阶段完成等同于整个 Roadmap 完成：B03/B06 的开发对照链路得到补齐，代表性保留集、企业任务迁移成本和与脚本方案的公平对照仍是后续工作。
+
+## 真实模型结果 · 2026-09-05
+
+[Actions 运行成功](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/33969106344)；[live 原始报告、清单与补丁](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/33969106344/artifacts/9970394560)，artifact 名称 `roadmap-live-33969106344-1`，保留 14 天。以下数值取自该次任务日志；原始结构化证据由 Actions 内独立校验器核验。
+
+模型为 `glm-5.3-flash`，测试源提交 `08d43fb6b76b6c831ce8ea1435646a3661d5a642`。全部 **10/10 任务通过**，实际 **10 次请求**（上限 40），输入 token 合计 **3229**、输出 token 合计 **1592**。所有任务停止原因均为 `objective_stop`，最终验收全部通过。
+
+### 协议互换与及时停止
+
+| 接口协议 | 场景 | 验收 | 请求数 | 输入 / 输出 token |
+|---|---|---|---:|---|
+| Anthropic Messages | Python 质量修复 | 通过 | 1 | 297 / 195 |
+| Anthropic Messages | C++ 头文件修复 | 通过 | 1 | 348 / 190 |
+| OpenAI Chat Completions | Python 质量修复 | 通过 | 1 | 297 / 102 |
+| OpenAI Chat Completions | C++ 头文件修复 | 通过 | 1 | 348 / 144 |
+
+上一阶段两个 live 任务各记录 8 次请求，本阶段对应任务各 1 次后停止。这个观察只适用于已运行的公开夹具；两轮并非严格随机对照，不能直接推广成所有任务的成本下降比例。两种接口访问同一智谱服务，不是两个模型厂商的效果排名。
+
+### 上下文对照
+
+Anthropic 协议，同一模型、嵌套编排、客观停止策略；`seed=42`，每条件一次。每组包含同样的 Python / C++ 两个任务。
+
+| 策略 | 通过 / 计划 | 实际请求 | 输入 token | 输出 token | 知识字符合计 | 耗时合计 ms |
+|---|---|---:|---:|---:|---:|---:|
+| 按需 routed | 2 / 2 | 2 | 645 | 282 | 246 | 14576 |
+| 全量 full | 2 / 2 | 2 | 706 | 486 | 496 | 16361 |
+| 不注入 none | 2 / 2 | 2 | 588 | 193 | 0 | 13284 |
+
+没有未运行或待运行试次，证据核验确认 `coverage_complete=True`。按需组比全量组少 61 个输入 token，但不注入组也能成功且用量更少。当前任务描述本身提供了足够线索，尚不能证明附加知识带来质量收益；输出长度与耗时只有单次样本，不作统计显著性结论。
+
+因此下一步应引入**确实依赖企业规范的任务和保留集**，保留三组公平对照，再判断什么知识值得注入。实验可以呈现“没有收益”的结果，本身就是评委能复核的工程能力。
+
+### 功能提交索引
+
+- [S2-01：及时停止 + 变更目录](https://github.com/TIMPICKLE/devops-agent-chassis/commit/675464e3824bcfd5f04c68c0a36cb118a6ec1691)
+- [S2-02：协议互换 + 本地验证记录](https://github.com/TIMPICKLE/devops-agent-chassis/commit/d9f901947955d0d829b87359a894539a810cf2ce)
+- [S2-03：上下文实验 + 报告核验 + Actions](https://github.com/TIMPICKLE/devops-agent-chassis/commit/08d43fb6b76b6c831ce8ea1435646a3661d5a642)
