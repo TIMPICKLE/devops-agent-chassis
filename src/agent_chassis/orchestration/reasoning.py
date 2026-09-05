@@ -10,7 +10,7 @@
     ├─ Plan-and-Execute   每步再问一次模型，失败可重规划
     ├─ Plan-and-Solve     一次调用出计划即答案，执行期不再问
     ├─ ReWOO              计划带 #E1 证据变量，执行后 Solver 汇总
-    └─ LLMCompiler        规划出带依赖的 DAG，无依赖任务并行成波次
+    └─ LLMCompiler        规划出带依赖的 DAG，按依赖分波（当前波内串行）
 
     做完再回头看（装饰器，包住上面任一种）
     ├─ Basic Reflection   纯自评，固定轮数，反思用完即弃
@@ -107,7 +107,11 @@ def invoke_tool(
 
     t0 = time.time()
     try:
-        out = toolbox.call(tool, **kwargs)
+        contextual = getattr(toolbox, "call_with_context", None)
+        if callable(contextual):
+            out = contextual(tool, task, ctx, **kwargs)
+        else:
+            out = toolbox.call(tool, **kwargs)
         rec = ToolCall(name=tool, args=kwargs, result=out, ok=True,
                        elapsed_ms=int((time.time() - t0) * 1000))
     except Exception as exc:
@@ -169,10 +173,14 @@ class ReActPattern(ReasoningPattern):
             ctx.iterations += 1
             action, target, kwargs = self.decide(task, ctx, toolbox)
             if action == "stop":
+                ctx.facts["stop_reason"] = "model_stop"
                 ctx.note(f"[ReAct] 模型判断收敛：{target}")
                 return
+            if action != "call":
+                raise ValueError(f"未知 ReAct 动作：{action!r}")
             invoke_tool(toolbox, target, kwargs or {}, task, ctx, self.executor_tools)
-        ctx.note(f"[ReAct] 达到迭代上限 {self.max_iterations}，强制收敛")
+        ctx.facts["stop_reason"] = "iteration_limit"
+        ctx.note(f"[ReAct] 达到迭代上限 {self.max_iterations}；是否成功仍由完成判据决定")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -311,23 +319,22 @@ class ReWOOPattern(ReasoningPattern):
 
 
 # ═══════════════════════════════════════════════════════════
-#  LLMCompiler：DAG 规划 + 波次并行 + Joiner
+#  LLMCompiler：DAG 规划 + 依赖分波 + Joiner
 # ═══════════════════════════════════════════════════════════
 
 @reasoning_registry.register("llm_compiler")
 class LLMCompilerPattern(ReasoningPattern):
-    """把任务编译成一张带依赖的 DAG，无依赖的节点并行成波次执行。
+    """把任务编译成一张带依赖的 DAG，无依赖的节点分到同一波次。
 
     与 ReWOO 的关键差别：ReWOO 的计划是**线性**的，第 3 步必须等第 2 步；
-    这里只要没有显式依赖就可以同波执行。串行长度从步数降到 DAG 深度，
-    这在工具调用有真实延迟时是数量级的差别。
+    这里显式表示依赖和可并行集合，但本实现仍逐个调用同波节点。
 
-    执行完一轮后由 Joiner 判断收工还是重新编译。演示实现里波次是顺序跑的，
-    因为底盘是同步的；`ctx.facts["waves"]` 记录了真正的并行结构。
+    执行完一轮后由 Joiner 判断收工还是重新编译。`ctx.facts["waves"]`
+    记录的是规划结构，不是并发执行证据，也不证明实际耗时减少。
     """
 
     name = "LLMCompiler"
-    description = "规划成带依赖的 DAG，无依赖节点并行成波次，Joiner 决定收工或重编译"
+    description = "规划成带依赖的 DAG，按波次串行执行，Joiner 决定收工或重编译"
 
     def __init__(
         self,
@@ -365,7 +372,7 @@ class LLMCompilerPattern(ReasoningPattern):
             ctx.facts["waves"] = [[n.id for n in w] for w in waves]
             ctx.note(
                 f"[LLMCompiler] {len(nodes)} 个节点编译成 {len(waves)} 波"
-                f"（串行长度 {len(waves)}，非 {len(nodes)}）"
+                f"（当前实际执行仍串行：{len(nodes)} 个节点）"
             )
 
             evidence: Dict[str, Any] = {}

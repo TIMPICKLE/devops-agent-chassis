@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import os
 import time
+import hashlib
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..contracts import (
+    ContextChunk,
     Injection,
     InjectionPoint,
     KnowledgeProvider,
@@ -48,21 +50,31 @@ class InjectionScheduler:
     ) -> str:
         """返回该时机拼好的知识文本，同时把注入记录写进 ctx。"""
         chunks: List[str] = []
+        envelopes: List[ContextChunk] = []
+        # 空收集也替换快照，避免沿用上一工具或上一轮重试的知识。
+        ctx.knowledge[point] = ()
         for provider in self.providers_at(point):
             text = provider.provide(point, task, ctx)
             if not text:
                 continue
+            label = provider.label_for(point, task, ctx)
+            digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            version = str(getattr(provider, "version", "unversioned"))
+            envelopes.append(ContextChunk(point, provider.name, label, digest, text, version))
             inj = Injection(
                 point=point,
                 provider=provider.name,
-                label=provider.label_for(point, task, ctx),
+                label=label,
                 chars=len(text),
                 at_ms=ctx.ms(),
+                content_hash=digest,
+                version=version,
             )
             ctx.injections.append(inj)
             if ctx.chassis is not None:
                 ctx.chassis.notify_injection(inj, task, ctx)
             chunks.append(text)
+        ctx.knowledge[point] = tuple(envelopes)
         return "\n\n".join(chunks)
 
     def timeline(self) -> List[Tuple[InjectionPoint, List[str]]]:
@@ -177,7 +189,6 @@ class SkillProvider(KnowledgeProvider):
         self.library = library
         self.points = list(points)
         self.meta_key = meta_key
-        self._last_skill: Optional[str] = None
 
     def _meta(self, task: Task, ctx: RunContext) -> Dict[str, Any]:
         meta = dict(task.payload.get(self.meta_key) or {})
@@ -186,7 +197,6 @@ class SkillProvider(KnowledgeProvider):
 
     def provide(self, point: InjectionPoint, task: Task, ctx: RunContext) -> Optional[str]:
         skill = self.library.route(self._meta(task, ctx))
-        self._last_skill = skill
         if not skill:
             return None
         body = self.library.load(skill)
@@ -195,7 +205,7 @@ class SkillProvider(KnowledgeProvider):
         return f"### 参考规范：{skill}\n\n{body}"
 
     def label_for(self, point: InjectionPoint, task: Task, ctx: RunContext) -> str:
-        return f"skills:{self._last_skill or 'none'}"
+        return f"skills:{self.library.route(self._meta(task, ctx)) or 'none'}"
 
 
 @knowledge_registry.register("static")

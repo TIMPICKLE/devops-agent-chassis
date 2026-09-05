@@ -37,6 +37,7 @@ from .contracts import (
     TaskResult,
     TaskSource,
     ToolCall,
+    Verdict,
 )
 from .failure import Ledger, WorkspaceGuard, ZeroSideEffectPolicy
 from .integration import ConnectorManager
@@ -111,6 +112,9 @@ class Chassis:
         self._active_run: ContextVar[Optional[Tuple[Task, RunContext]]] = ContextVar(
             f"agent_chassis_active_run_{id(self)}", default=None
         )
+        self._active_verdict: ContextVar[Optional[Verdict]] = ContextVar(
+            f"agent_chassis_active_verdict_{id(self)}", default=None
+        )
 
     # ── ① 编排契约 ──────────────────────────────────────
     def with_orchestrator(self, orchestrator: Orchestrator) -> "Chassis":
@@ -176,6 +180,10 @@ class Chassis:
         if missing:
             raise ChassisError("装配不完整，缺少：" + "、".join(missing))
 
+        configured = getattr(self._orchestrator, "criteria", None)
+        if configured is not None and configured is not self._criteria:
+            raise ChassisError("编排器与 with_payload 配置了不同的完成判据；请使用同一实例")
+
         if self._failure is None:
             self._failure = ZeroSideEffectPolicy(Ledger())
         self._scheduler = InjectionScheduler(self._providers)
@@ -219,8 +227,10 @@ class Chassis:
     def _run_task(self, task: Task) -> TaskResult:
         ctx = RunContext(chassis=self)
         token = self._active_run.set((task, ctx))
+        verdict_token = self._active_verdict.set(None)
         try:
-            started = time.time()
+            started = time.monotonic()
+            failed_by_exception = False
             self.observers.on_task_start(task, ctx)
 
             try:
@@ -229,6 +239,9 @@ class Chassis:
 
                 while True:
                     try:
+                        self._active_verdict.set(None)
+                        ctx.facts["attempt_tool_call_start"] = len(ctx.tool_calls)
+                        ctx.facts.pop("stop_reason", None)
                         result = self._orchestrator.run(task, ctx)
                         break
                     except Exception as exc:
@@ -238,22 +251,53 @@ class Chassis:
                         raise
 
                 if result.outcome is Outcome.SUCCEEDED:
+                    # 自定义编排器也不能仅凭自己返回 succeeded 绕过载荷验收。
+                    result.verdict = self.judge(task, ctx)
+                    if not result.verdict.done:
+                        result.outcome = Outcome.FAILED
+                        result.error = result.verdict.reason
+
+                if result.outcome is Outcome.SUCCEEDED:
                     self._failure.remember(task.key, Outcome.SUCCEEDED)
-                elif result.outcome is Outcome.FAILED:
-                    self._failure.remember(task.key, Outcome.FAILED, result.error)
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
-                outcome = self._failure.on_failure(task, error, ctx)
+                failed_by_exception = True
                 result = TaskResult(
-                    task=task, outcome=outcome, error=error,
+                    task=task, outcome=Outcome.FAILED, error=error,
                     steps=list(ctx.steps), iterations=ctx.iterations,
-                    elapsed_ms=int((time.time() - started) * 1000),
                 )
 
+            if result.outcome is Outcome.FAILED:
+                # 终态收尾只有一个入口；策略/账本异常不能重新进入清理或覆盖原始否决。
+                try:
+                    outcome = self._failure.on_failure(task, result.error, ctx)
+                    if failed_by_exception:
+                        if not isinstance(outcome, Outcome) or outcome not in (Outcome.FAILED, Outcome.SKIPPED):
+                            raise ChassisError("失败策略只能返回 FAILED/SKIPPED，不能把未验收任务标记为成功")
+                        result.outcome = outcome
+                except Exception as exc:
+                    result.artifacts["failure_policy_error"] = f"{type(exc).__name__}: {exc}"
+                result.artifacts["cleanups"] = list(ctx.facts.get("cleanups", []))
+            result.elapsed_ms = int((time.monotonic() - started) * 1000)
             self.observers.on_task_end(result, ctx)
             return result
         finally:
+            self._active_verdict.reset(verdict_token)
             self._active_run.reset(token)
+
+    def judge(self, task: Task, ctx: RunContext) -> Verdict:
+        """单一权威最终验收；内置编排器和外层收尾共享本次尝试的裁定。"""
+        active = self._active_run.get()
+        if active is None or active[0] is not task or active[1] is not ctx:
+            raise ChassisError("judge 只能用于当前正在执行的任务上下文")
+        verdict = self._active_verdict.get()
+        if verdict is None:
+            self.inject(InjectionPoint.BEFORE_VERDICT, task, ctx)
+            verdict = self._criteria.judge(task, ctx)
+            if not isinstance(verdict, Verdict) or type(verdict.done) is not bool:
+                raise ChassisError("DoneCriteria 必须返回含布尔 done 的 Verdict")
+            self._active_verdict.set(verdict)
+        return verdict
 
     def _prepare_retry(self, task: Task, error: str, ctx: RunContext) -> bool:
         """若失败策略支持有限重试，准备下一次干净尝试。"""

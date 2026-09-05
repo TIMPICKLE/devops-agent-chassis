@@ -20,7 +20,7 @@ import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
 # ═══════════════════════════════════════════════════════════
@@ -274,6 +274,30 @@ class Injection:
     label: str
     chars: int
     at_ms: int
+    content_hash: str = ""
+    version: str = "unversioned"
+
+
+@dataclass(frozen=True)
+class ContextChunk:
+    """任务内的不可变知识片段；正文只在内存中供明确的消费者读取。"""
+    point: InjectionPoint
+    provider: str
+    label: str
+    content_hash: str
+    text: str = field(repr=False)
+    version: str = "unversioned"
+
+
+@dataclass(frozen=True)
+class ContextReceipt:
+    """本地上下文读取回执，不等于远端模型已经接受了请求。"""
+    consumer: str
+    points: Tuple[str, ...]
+    included: Tuple[str, ...]
+    omitted: Tuple[str, ...]
+    chars: int
+    at_ms: int
 
 
 class KnowledgeProvider(ABC):
@@ -310,7 +334,7 @@ class FailurePolicy(ABC):
 
     @abstractmethod
     def on_failure(self, task: Task, error: str, ctx: "RunContext") -> Outcome:
-        """处理一次失败，返回最终 Outcome。"""
+        """处理一次失败，返回 FAILED 或 SKIPPED；不能替代验收器宣告成功。"""
 
     @abstractmethod
     def seen(self, key: str) -> bool:
@@ -367,6 +391,45 @@ class RunContext:
 
     #: 由 Chassis 注入，插件通过它访问其余能力
     chassis: Any = None
+
+    #: 最近一次同一时机的快照；知识不是事实，不能混入 facts。
+    knowledge: Dict[InjectionPoint, Tuple[ContextChunk, ...]] = field(default_factory=dict)
+    context_receipts: List[ContextReceipt] = field(default_factory=list)
+    #: 可选模型 adapter 的用量/时延元数据，不记录 Prompt 或隐藏思维。
+    model_calls: List[Dict[str, Any]] = field(default_factory=list)
+
+    def context_for(
+        self,
+        consumer: str,
+        points: Sequence[InjectionPoint],
+        max_chars: Optional[int] = None,
+    ) -> str:
+        """按调用方给定优先级装配完整片段，并记录预算省略项。
+
+        字符预算不是 token 预算。只读取指定时机，不自动扩大知识作用域；
+        调用方必须把返回值传给实际执行器，回执本身不证明远端执行成功。
+        """
+        if not consumer or (max_chars is not None and max_chars < 0):
+            raise ValueError("consumer 不能为空，max_chars 不能为负")
+        selected: List[str] = []
+        included: List[str] = []
+        omitted: List[str] = []
+        chars = 0
+        ordered = list(dict.fromkeys(points))
+        for point in ordered:
+            for chunk in self.knowledge.get(point, ()):
+                size = len(chunk.text) + (2 if selected else 0)
+                if max_chars is not None and chars + size > max_chars:
+                    omitted.append(chunk.content_hash)
+                    continue
+                selected.append(chunk.text)
+                included.append(chunk.content_hash)
+                chars += size
+        self.context_receipts.append(ContextReceipt(
+            consumer, tuple(p.value for p in ordered), tuple(included),
+            tuple(omitted), chars, self.ms(),
+        ))
+        return "\n\n".join(selected)
 
     def ms(self) -> int:
         return int((time.time() - self.started_at) * 1000)

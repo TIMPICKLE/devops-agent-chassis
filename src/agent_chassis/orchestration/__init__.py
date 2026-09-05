@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import time
+from copy import deepcopy
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from ..contracts import (
@@ -122,23 +123,54 @@ class ToolBox:
     def __init__(self) -> None:
         self._tools: Dict[str, Callable[..., Any]] = {}
         self._desc: Dict[str, str] = {}
+        self._input_schemas: Dict[str, Dict[str, Any]] = {}
+        self._contextual: set = set()
 
-    def add(self, name: str, fn: Callable[..., Any], description: str = "") -> "ToolBox":
+    def add(
+        self, name: str, fn: Callable[..., Any], description: str = "",
+        *, input_schema: Optional[Dict[str, Any]] = None,
+    ) -> "ToolBox":
         self._tools[name] = fn
+        self._contextual.discard(name)
+        self._input_schemas.pop(name, None)
+        if input_schema is not None:
+            self._input_schemas[name] = deepcopy(input_schema)
         doc = (fn.__doc__ or "").strip().splitlines()
         self._desc[name] = description or (doc[0] if doc else "")
+        return self
+
+    def add_contextual(
+        self, name: str, fn: Callable[..., Any], description: str = "",
+        *, input_schema: Optional[Dict[str, Any]] = None,
+    ) -> "ToolBox":
+        """显式 opt-in：仅由运行时传入 task/ctx，不暴露为模型参数。"""
+        self.add(name, fn, description, input_schema=input_schema)
+        self._contextual.add(name)
         return self
 
     def names(self) -> List[str]:
         return list(self._tools)
 
-    def schema(self) -> List[Dict[str, str]]:
-        return [{"name": n, "description": self._desc.get(n, "")} for n in self._tools]
+    def schema(self) -> List[Dict[str, Any]]:
+        return [dict(
+            name=n, description=self._desc.get(n, ""),
+            **({"inputSchema": deepcopy(self._input_schemas[n])}
+               if n in self._input_schemas else {}),
+        ) for n in self._tools]
 
     def call(self, name: str, **kwargs: Any) -> Any:
         if name not in self._tools:
             raise KeyError(f"未注册工具 {name!r}，可用：{self.names()}")
+        if name in self._contextual:
+            raise ValueError(f"工具 {name!r} 需要 call_with_context")
         return self._tools[name](**kwargs)
+
+    def call_with_context(self, name: str, task: Task, ctx: RunContext, /, **kwargs: Any) -> Any:
+        if name in self._contextual:
+            if "task" in kwargs or "ctx" in kwargs:
+                raise ValueError("模型参数不能覆盖运行时 task/ctx")
+            return self._tools[name](task=task, ctx=ctx, **kwargs)
+        return self.call(name, **kwargs)
 
 
 def _finish(
@@ -149,13 +181,14 @@ def _finish(
 ) -> TaskResult:
     """统一收尾：跑完成判据，组装结果。
 
-    判据只读 ctx.facts，拿不到 ctx.model_notes。这不是约定俗成，
-    是把「Agent 不能自己给自己判卷」写进了调用签名。
+    通过 Chassis 运行时，以 with_payload 的判据为权威并缓存裁定；
+    独立使用编排器时仍支持原有可选判据。判据只读 facts 是实现约定，
+    不应把 RunContext 的 Python 签名描述成安全隔离。
     """
     verdict: Optional[Verdict] = None
-    if criteria is not None:
-        if ctx.chassis is not None:
-            ctx.chassis.inject(InjectionPoint.BEFORE_VERDICT, task, ctx)
+    if ctx.chassis is not None:
+        verdict = ctx.chassis.judge(task, ctx)
+    elif criteria is not None:
         verdict = criteria.judge(task, ctx)
     outcome = Outcome.SUCCEEDED if (verdict is None or verdict.done) else Outcome.FAILED
     return TaskResult(

@@ -11,6 +11,8 @@ Agent Chassis —— DevOps 数字员工工程底盘。
 from .chassis import BuildReport, Chassis, ChassisError
 from .contracts import (
     Connector,
+    ContextChunk,
+    ContextReceipt,
     DoneCriteria,
     Injection,
     InjectionPoint,
@@ -40,6 +42,7 @@ from .knowledge import (
     by_filename_markers,
 )
 from .observability import ConsoleObserver, RecordingObserver
+from .evidence import EvidenceObserver, assembly_manifest
 from .orchestration import (
     BasicReflectionPattern,
     LLMCompilerPattern,
@@ -66,6 +69,10 @@ __all__ = [
     "ChassisError",
     "BuildReport",
     "Connector",
+    "ContextChunk",
+    "ContextReceipt",
+    "EvidenceObserver",
+    "assembly_manifest",
     "ConnectorManager",
     "ConsoleObserver",
     "DoneCriteria",

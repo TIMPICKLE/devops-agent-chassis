@@ -164,7 +164,7 @@ class WorkspaceChangedCriteria(DoneCriteria):
             return Verdict(
                 done=False,
                 reason="未检测到文件变更",
-                evidence={"diff": [], "model_said": ctx.model_notes[-1:] or ["（无）"]},
+                evidence={"diff": []},
             )
         return Verdict(
             done=True,

@@ -147,7 +147,8 @@ class RecordingObserver(Observer):
         self.traces.append(TraceRecord(
             run_id=ctx.run_id, seq=self._next(), kind="injection",
             label=f"{inj.point.value} / {inj.label}", at_ms=inj.at_ms,
-            detail={"provider": inj.provider, "chars": inj.chars},
+            detail={"provider": inj.provider, "chars": inj.chars,
+                    "content_hash": inj.content_hash, "version": inj.version},
         ))
 
     def on_task_end(self, result: TaskResult, ctx: RunContext) -> None:
