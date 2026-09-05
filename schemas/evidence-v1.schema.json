@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent Chassis portable run evidence v1",
+  "type": "object",
+  "required": ["schema_version", "runs"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "agent-chassis.evidence/v1"},
+    "runs": {"type": "array", "items": {"$ref": "#/$defs/run"}}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "count": {"type": "integer", "minimum": 0},
+    "tokens": {"type": ["integer", "null"], "minimum": 0},
+    "strings": {"type": "array", "items": {"type": "string"}},
+    "verdict": {
+      "type": "object", "required": ["done", "reason", "evidence"], "additionalProperties": false,
+      "properties": {"done": {"type": "boolean"}, "reason": {"type": "string"}, "evidence": {"type": "object"}}
+    },
+    "injection": {
+      "type": "object", "required": ["point", "provider", "label", "content_hash", "version", "chars"], "additionalProperties": false,
+      "properties": {
+        "point": {"type": "string"}, "provider": {"type": "string"}, "label": {"type": "string"},
+        "content_hash": {"type": "string", "pattern": "^([0-9a-f]{64})?$"},
+        "version": {"type": "string"}, "chars": {"$ref": "#/$defs/count"}
+      }
+    },
+    "receipt": {
+      "type": "object", "required": ["consumer", "points", "included", "omitted", "chars", "at_ms"], "additionalProperties": false,
+      "properties": {
+        "consumer": {"type": "string", "minLength": 1}, "points": {"$ref": "#/$defs/strings"},
+        "included": {"type": "array", "items": {"$ref": "#/$defs/hash"}},
+        "omitted": {"type": "array", "items": {"$ref": "#/$defs/hash"}},
+        "chars": {"$ref": "#/$defs/count"}, "at_ms": {"$ref": "#/$defs/count"}
+      }
+    },
+    "model_call": {
+      "type": "object", "required": ["adapter", "model", "mode", "ok", "elapsed_ms", "input_tokens", "output_tokens"],
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {"type": "string"}, "model": {"type": "string"}, "resolved_model": {"type": "string"},
+        "mode": {"enum": ["live", "test-transport"]}, "ok": {"type": "boolean"},
+        "elapsed_ms": {"$ref": "#/$defs/count"}, "request_id": {"type": "string"}, "error_type": {"type": "string"},
+        "input_tokens": {"$ref": "#/$defs/tokens"}, "output_tokens": {"$ref": "#/$defs/tokens"}
+      }
+    },
+    "run": {
+      "type": "object",
+      "required": ["schema_version", "content_id", "run_id", "task_key", "task_kind", "input_id", "code_ref", "assembly_id", "mode", "outcome", "verdict", "error", "cleanup", "steps", "elapsed_ms", "iterations", "stop_reason", "injections", "context_receipts", "tool_calls", "model_calls", "usage"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {"const": "agent-chassis.run/v1"}, "content_id": {"$ref": "#/$defs/hash"},
+        "run_id": {"type": "string", "minLength": 1}, "task_key": {"type": "string"}, "task_kind": {"type": "string"},
+        "input_id": {"$ref": "#/$defs/hash"}, "code_ref": {"type": "string"},
+        "assembly_id": {"type": "string", "pattern": "^([0-9a-f]{64})?$"}, "mode": {"type": "string"},
+        "outcome": {"enum": ["succeeded", "failed", "skipped"]},
+        "verdict": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/verdict"}]}, "error": {"type": "string"},
+        "cleanup": {
+          "type": "object", "required": ["actions", "policy_error"], "additionalProperties": false,
+          "properties": {"actions": {"$ref": "#/$defs/strings"}, "policy_error": {"type": "string"}}
+        },
+        "steps": {"$ref": "#/$defs/strings"}, "elapsed_ms": {"$ref": "#/$defs/count"}, "iterations": {"$ref": "#/$defs/count"},
+        "stop_reason": {"type": "string"}, "injections": {"type": "array", "items": {"$ref": "#/$defs/injection"}},
+        "context_receipts": {"type": "array", "items": {"$ref": "#/$defs/receipt"}},
+        "tool_calls": {
+          "type": "array", "items": {
+            "type": "object", "required": ["name", "ok", "elapsed_ms"], "additionalProperties": false,
+            "properties": {"name": {"type": "string"}, "ok": {"type": "boolean"}, "elapsed_ms": {"$ref": "#/$defs/count"}}
+          }
+        },
+        "model_calls": {"type": "array", "items": {"$ref": "#/$defs/model_call"}},
+        "usage": {
+          "type": "object", "required": ["complete", "input_tokens", "output_tokens"], "additionalProperties": false,
+          "properties": {"complete": {"type": "boolean"}, "input_tokens": {"$ref": "#/$defs/tokens"}, "output_tokens": {"$ref": "#/$defs/tokens"}}
+        }
+      }
+    }
+  }
+}

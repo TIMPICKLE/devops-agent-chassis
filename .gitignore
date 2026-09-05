@@ -11,6 +11,10 @@ venv/
 # 运行时产物
 state/
 *.log
+reports/roadmap-showcase*/
+.env
+.env.*
+!.env.example
 
 # 系统
 .DS_Store
