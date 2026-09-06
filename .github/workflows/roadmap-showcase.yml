@@ -10,6 +10,10 @@ on:
         description: "Run paid live model verification after contracts pass"
         type: boolean
         default: false
+      policy_live:
+        description: "Run the stage 3 project-policy experiment with real models"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -70,12 +74,61 @@ jobs:
           if [[ -f reports/roadmap-showcase/context-experiment/summary.md ]]; then
             cat reports/roadmap-showcase/context-experiment/summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Run and independently verify the four-node policy workflow
+        run: |
+          python tools/run_policy_workflow.py --mode offline --repeats 1 --max-calls 2 --output-dir reports/roadmap-showcase/config-policy
+          python tools/verify_policy_workflow.py reports/roadmap-showcase/config-policy
+          cat reports/roadmap-showcase/config-policy/summary.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload contracts, patches and evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: roadmap-contracts-py${{ matrix.python-version }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: reports/roadmap-showcase/
+          if-no-files-found: warn
+          retention-days: 14
+
+  policy-live:
+    needs: contract-matrix
+    if: >-
+      github.repository == 'TIMPICKLE/devops-agent-chassis' &&
+      ((github.event_name == 'workflow_dispatch' && inputs.policy_live) ||
+       (github.event_name == 'push' && contains(github.event.head_commit.message, '[roadmap-stage3-live]')))
+    name: Policy workflow · live knowledge experiment
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install model adapter and evidence verifier
+        run: python -m pip install -e ".[llm]"
+      - name: Run 24 real policy trials (at most 48 requests)
+        env:
+          BIGMODEL_API_KEY: ${{ secrets.BIGMODEL_API_KEY }}
+        run: >-
+          python tools/run_policy_workflow.py --mode live --repeats 2 --seed 42 --max-calls 2
+          --protocol anthropic --model glm-5.3-flash --base-url https://open.bigmodel.cn/api/anthropic
+          --output-dir reports/config-policy-live
+      - name: Independently verify all live policy evidence and configurations
+        if: always()
+        run: python tools/verify_policy_workflow.py reports/config-policy-live --require-live
+      - name: Publish policy experiment overview
+        if: always()
+        run: |
+          if [[ -f reports/config-policy-live/summary.md ]]; then
+            cat reports/config-policy-live/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload frozen plan, candidate configurations, patches and evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: config-policy-live-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/config-policy-live/
           if-no-files-found: warn
           retention-days: 14
 

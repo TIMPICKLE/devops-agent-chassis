@@ -12,6 +12,8 @@ venv/
 state/
 *.log
 reports/roadmap-showcase*/
+reports/config*/
+reports/policy*/
 .env
 .env.*
 !.env.example
