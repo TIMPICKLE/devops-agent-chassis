@@ -115,18 +115,26 @@ def test_generated_code_runs_real_files_compiler_and_model_adapter(tmp_path, mon
         requests.append(current)
         if len(requests) == 1:
             name, arguments = "read_file", {"path": header}
+            if case == "scheduler":
+                name, arguments = "read_files", {"paths": ["include/legacy/api.hpp", header, "missing.hpp"]}
         else:
             lines = current["task"]["source"].splitlines(keepends=True)
             lines[0] = '#include "' + header + '"\n'
             name, arguments = "submit_source", {"content": "".join(lines)}
         return {"stop_reason": "tool_use", "content": [{"type": "tool_use", "name": name, "input": arguments}],
                 "usage": {"input_tokens": 50, "output_tokens": 20}}
-    decider = AnthropicDecider(config, tool_names=["read_file", "submit_source"], transport=transport)
+    decider = AnthropicDecider(config, tool_names=["read_file", "read_files", "submit_source"], transport=transport)
     output = tmp_path / "run"
     output.mkdir()
     accepted = execute(project, FIXTURES / case, unit, output, config, decider=decider, require_live=False)
     assert accepted["accepted"] and accepted["model_calls"] == 2
-    assert requests[1]["observations"][0]["result"]["content"] == original["files"][header]
+    observed = requests[1]["observations"][0]["result"]
+    if case == "scheduler":
+        assert observed["files"][0]["content"] == original["files"]["include/legacy/api.hpp"]
+        assert observed["files"][1]["content"] == original["files"][header]
+        assert observed["files"][2] == {"found": False, "path": "missing.hpp"}
+    else:
+        assert observed["content"] == original["files"][header]
     assert requests[0]["task"]["build_error"]
     assert "项目引用规范" in requests[0]["context"]
     assert accepted["nodes"] == ["inspect_build", "repair_includes", "check_candidate"]
@@ -158,3 +166,21 @@ def test_missing_unit_and_ambiguous_header_are_real_compiler_failures():
     snapshot = load_workspace(FIXTURES / "scheduler", "app/worker.cpp")
     wrong = snapshot["files"][snapshot["unit"]].replace('"api.hpp"', '"include/legacy/api.hpp"')
     assert compile_snapshot(snapshot, wrong)["exit_code"] != 0
+
+
+def test_protocol_failure_is_reported_before_incomplete_node_trace(tmp_path, monkeypatch):
+    project, config = build_test_project(tmp_path, monkeypatch)
+    def transport(url, headers, body, timeout):
+        return {"stop_reason": "tool_use", "content": [
+            {"type": "tool_use", "name": "read_file", "input": {"path": path}}
+            for path in ("include/core/api.hpp", "include/legacy/api.hpp")],
+            "usage": {"input_tokens": 30, "output_tokens": 20}}
+    decider = AnthropicDecider(config, tool_names=["read_file"], transport=transport)
+    output = tmp_path / "failed-run"
+    output.mkdir()
+    with pytest.raises(ValueError, match="final verdict: ModelError: Expected one tool call"):
+        execute(project, FIXTURES / "scheduler", "app/worker.cpp", output, config,
+                decider=decider, require_live=False)
+    run = json.loads((output / "runtime.evidence.json").read_text())["runs"][0]
+    assert run["outcome"] == "failed" and len(run["model_calls"]) == 1
+    assert not (output / "acceptance.json").exists()

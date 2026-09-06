@@ -20,3 +20,5 @@
 本地 Python 3.12 完整回归 **184 passed**；本轮新增 7 个测试用例。文档相对链接已核对。Actions 的真实模型结果尚未取得，不以本地模拟代替。
 
 首次 [真实链路运行 34019845120](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34019845120) 未通过：生成阶段 1 次真实调用，输入 1,077 / 输出 6,000 token，返回截断错误，尚未生成可运行项目。该结果不能记为运行通过。生成输出预算调整为 16,384 token、单次请求超时 240 秒，同时要求简洁的代码和说明；保留最多 3 次调用的边界，不自动忽略截断。同期 [常规回归](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34019845088) 通过。
+
+第二次 [真实链路运行 34020080899](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34020080899) 完成真实生成（1 次调用，输入 1,104 / 输出 4,548 token），生成物在 pricing 上运行并独立验收通过（3 次调用）。scheduler 的首个模型响应包含多个工具调用，违反当前单动作协议，整条链路未通过。为比较同名头文件增加 `read_files(paths)` 批量读取工具（一次最多 6 个文件），仍不忽略协议错误；外部验收先报告实际运行失败，再检查节点，避免失败流程显示为节点清单不符。

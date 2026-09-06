@@ -57,12 +57,12 @@ def verify_runtime(project_dir, report_dir, *, repo=None, require_live=False):
     if len(evidence["runs"]) != 1:
         raise ValueError("Expected one employee task")
     run = evidence["runs"][0]
+    if run["outcome"] != "succeeded" or run["verdict"] is None or not run["verdict"]["done"]:
+        raise ValueError("Employee task did not pass its final verdict: " + str(run.get("error", "")))
     source = WorkspaceSource(snapshot, baseline)
     if (run["input_id"] != content_id(source.task.payload) or manifest["runtime"]["project_id"] != project["content_id"]
             or run["steps"] != [n["name"] for n in spec["nodes"]]):
         raise ValueError("Runtime input, project link or observed nodes do not match")
-    if run["outcome"] != "succeeded" or run["verdict"] is None or not run["verdict"]["done"]:
-        raise ValueError("Employee task did not pass its final verdict")
     candidate = Candidate(snapshot["files"][snapshot["unit"]], snapshot["unit"],
                           (report_dir / "candidate.cpp").read_text(encoding="utf-8"))
     actual = CompilerCriteria(snapshot, candidate, baseline).validate()

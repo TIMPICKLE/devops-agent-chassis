@@ -72,7 +72,9 @@ class WorkspaceSource(TaskSource):
             "target": {"path": snapshot["unit"]}, "source": snapshot["files"][snapshot["unit"]],
             "files": sorted(snapshot["files"]), "build_error": baseline["diagnostics"],
             "goal": "Fix the actual compiler error by changing include directives only. "
-                    "Read project headers when needed. Submit the complete source; preserve every other line.",
+                    "Read project headers when needed. To compare multiple files, use one read_files(paths) call; "
+                    "never issue multiple tool calls in one response. "
+                    "Submit the complete source; preserve every other line.",
         }, self.name)
 
     def fetch(self, limit=1):
@@ -130,8 +132,17 @@ def workspace_tools(snapshot, candidate, criteria, boundary):
         return {"accepted": verdict.done, "reason": verdict.reason,
                 "candidate_sha256": candidate.digests()["candidate_sha256"]}
 
+    def read_files(paths):
+        """Compare up to 6 source/header files in ONE tool call; prefer this for same-named headers."""
+        if not isinstance(paths, list) or not 1 <= len(paths) <= 6 or any(not isinstance(p, str) for p in paths):
+            raise ValueError("Read between 1 and 6 file paths")
+        return {"files": [read_file(path) for path in paths]}
+
     return (ToolBox().add("read_file", read_file, input_schema={
         "type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"],
-        "additionalProperties": False}).add("submit_source", submit_source, input_schema={
+        "additionalProperties": False}).add("read_files", read_files, input_schema={
+        "type": "object", "properties": {"paths": {"type": "array", "items": {"type": "string"},
+        "minItems": 1, "maxItems": 6}}, "required": ["paths"], "additionalProperties": False
+        }).add("submit_source", submit_source, input_schema={
         "type": "object", "properties": {"content": {"type": "string", "maxLength": 20000}},
         "required": ["content"], "additionalProperties": False}))

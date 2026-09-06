@@ -86,7 +86,7 @@ Use public imports:
 The runtime supplies kit; do not recreate a model client, source, validator or tools:
   kit.source: real filesystem TaskSource with actual compiler diagnostics
   kit.criteria: independent CompilerCriteria, authoritative completion criteria
-  kit.toolbox: read_file(path) and submit_source(content); real project file tools
+  kit.toolbox: read_file(path), read_files(paths), submit_source(content); real project tools
   kit.pattern: ReAct with a real Anthropic/OpenAI decider and objective stop
   kit.boundary: repo.read / repo.write capability boundary
   kit.providers: versioned knowledge providers, active in phase=repair
