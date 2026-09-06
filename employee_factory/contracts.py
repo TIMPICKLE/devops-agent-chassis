@@ -93,8 +93,9 @@ The runtime supplies kit; do not recreate a model client, source, validator or t
   kit.observer: evidence observer (attach it)
   kit.prepare(task, ctx): checks baseline failed and enters repair phase
   kit.verify(task, ctx): independently checks candidate, records verified digest
+Keep employee.py under 50 lines and README under 400 words; submit the tool directly.
 Choose descriptive node names and explain them in assembly.json. Assemble a linear
-StateMachineOrchestrator with FnStep(name, kit.prepare), one
+StateMachineOrchestrator(steps) where steps is a list containing FnStep(name, kit.prepare), one
 AgentStep(name, pattern=kit.pattern, toolbox=kit.toolbox), and FnStep(name, kit.verify).
 Connect Chassis(name).with_payload(kit.source, kit.criteria).with_orchestrator(flow)
 .with_boundary(kit.boundary).with_knowledge(*kit.providers).observe(kit.observer).build().

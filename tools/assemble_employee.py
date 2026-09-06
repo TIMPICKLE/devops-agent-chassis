@@ -21,7 +21,7 @@ def main(argv=None):
     parser.add_argument("--request-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     add_model_arguments(parser)
-    parser.set_defaults(max_calls=3, max_tokens=6000, timeout=120)
+    parser.set_defaults(max_calls=3, max_tokens=16384, timeout=240)
     args = parser.parse_args(argv)
     try:
         frozen = load_request(args.request_dir)

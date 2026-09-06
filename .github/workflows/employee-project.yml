@@ -58,7 +58,7 @@ jobs:
       - name: Generate employee code from requirements (real model, at most 3 calls)
         run: >-
           python tools/assemble_employee.py --request-dir employee_requests/build_repair
-          --output-dir reports/employee-project/project --max-calls 3 --max-tokens 6000 --timeout 120
+          --output-dir reports/employee-project/project --max-calls 3 --max-tokens 16384 --timeout 240
       - name: Verify generation provenance before importing generated code
         run: python tools/verify_employee_project.py --project reports/employee-project/project --require-live
       - name: Run generated employee on pricing sources (new process, real model)
