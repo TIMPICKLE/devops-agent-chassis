@@ -14,6 +14,7 @@ state/
 reports/roadmap-showcase*/
 reports/config*/
 reports/policy*/
+reports/employee*/
 .env
 .env.*
 !.env.example

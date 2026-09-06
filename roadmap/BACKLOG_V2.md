@@ -1,4 +1,6 @@
-# Execution Backlog · 修订版 v2
+# Execution Backlog · 修订版 v2（历史归档）
+
+> 当前实施依据为 [Backlog v3](BACKLOG.md)，以下保留旧路线。
 
 > 更新：2026-09-05；基线：`bdd2b0a`。
 > 已进入 `feat/roadmap-showcase-v1` 分支实施。以下保留任务的完整验收门槛；实际完成度见 [IMPLEMENTATION.md](./IMPLEMENTATION.md)。用户已要求本轮优先前瞻性与可拓展性，新安全平台建设延后，不撤销已有约束。
