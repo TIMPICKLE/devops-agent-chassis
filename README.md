@@ -22,6 +22,8 @@
 
 维护入口：[规范变化后更新员工项目](docs/EMPLOYEE_PROJECT_UPDATES.md)。预览影响、保留人工修改，并对新旧任务重新验收；实现回顾与 Actions 结果见[第五阶段](changelog/stage-05.md)。
 
+**当前已验证**：生成员工后运行两个源码项目；更新知识后，同一输入按新规范改变选择，两个旧任务继续通过。第五阶段 CI 回归 195 项通过。能力、限制和受测版本统一见[当前状态](roadmap/CURRENT_STATE.md)；以下各阶段数字保留其历史口径。
+
 **第三阶段：[项目规范驱动的配置修复](docs/CONFIG_POLICY_WORKFLOW.md)**。按项目、环境和阶段匹配知识，通过四个实际节点生成并验收配置，配套冻结案例、三种知识策略对照与独立核验。进度与 Actions 结果见[第三阶段记录](changelog/stage-03.md)。
 
 第三阶段回归 177 项通过；真实模型 routed / full 各 8/8 验收通过，24 个试次证据核验通过。none 组 0/8，含 4 次执行异常，因此 live 工作流整体未通过。完整结果与成本计量限制见[实测说明](changelog/stage-03.md#真实模型结果--2026-09-06)。
@@ -60,7 +62,7 @@ python tools/verify_roadmap_evidence.py reports/roadmap-showcase-demo
 
 ## ⏱️ 五分钟看懂
 
-零依赖，Python 3.9+，直接跑：
+基础底盘和以下确定性示例无必需第三方依赖，Python 3.9+，在仓库根目录运行。真实模型参考入口需安装 `.[llm]`，MCP 传输需可选 SDK；这些示例不代替真实模型验证：
 
 ```bash
 python examples/01_swap_orchestration.py   # 换编排方式，载荷代码一行不动
@@ -96,20 +98,20 @@ python examples/05_permissions_and_failure.py  # 能力借来，权限不借
 
 | 模式 | 特征 | 代价 |
 |---|---|---|
-| `ReActPattern` | 无计划，每步观察后重新决策，收敛点由模型判断 | 轮次不可预测 |
-| `PlanExecutePattern` | 计划是显式产物可被审查，**每步再问一次**，失败可重规划 | token 接近 ReAct |
-| `PlanAndSolvePattern` | **一次调用**出计划即答案，执行期不再问 | 无重规划，计划错了就错到底 |
-| `ReWOOPattern` | 计划带 `#E1` 证据变量表达依赖，执行后 Solver 汇总 | 固定两次调用，中途不能调整 |
+| `ReActPattern` | 逐步决策和工具反馈；可用 `stop_when` 客观停止，最终仍需验收 | 次数受迭代与模型预算限制 |
+| `PlanExecutePattern` | 调用 planner 产出计划，逐步执行工具，异常时可重规划；并非自动每步请求模型 | 请求次数取决于 planner 和工具实现 |
+| `PlanAndSolvePattern` | 一次 planner 回调生成计划，然后执行工具 | 无重规划；回调不一定调用模型 |
+| `ReWOOPattern` | planner 生成带 `#E1` 证据变量的计划；执行后可选 solver 汇总 | 无 solver 时仅 planner 回调，不能固定推算模型次数 |
 | `LLMCompilerPattern` | 编译成带依赖的 **DAG**，按依赖分波；当前实现波内仍串行，Joiner 决定收工或重编译 | 真正并发尚待实现与测量 |
 | `BasicReflectionPattern` | **装饰器**：生成→自评→重生成，固定轮数，反思用完即弃 | 评价者就是模型自己 |
-| `ReflexionPattern` | **装饰器**：外部评估器判定，反思累积成情景记忆 | 最贵 |
+| `ReflexionPattern` | **装饰器**：外部评估器判定，在当前运行上下文内累积反馈 | 成本取决于重试和模型接入，不是已测得的费用排名 |
 
 几组容易被混为一谈的差别，它们决定了这些为什么是独立的类：
 
 | 常被混淆的一对 | 真正的差别 |
 |---|---|
-| Plan-and-Execute vs Plan-and-Solve | 前者每步都再问一次模型且可重规划；后者全程只有一次调用 |
-| Plan-and-Solve vs ReWOO | ReWOO 多一个 Solver 汇总调用，且计划里带证据变量做依赖替换 |
+| Plan-and-Execute vs Plan-and-Solve | 当前实现中前者可在工具异常后重新调用 planner；后者执行一次计划、不重规划 |
+| Plan-and-Solve vs ReWOO | ReWOO 支持证据变量替换及可选 Solver；实际模型调用取决于回调实现 |
 | ReWOO vs LLMCompiler | ReWOO 的计划是线性的；LLMCompiler 只要没有显式依赖就可同波执行 |
 | Basic Reflection vs Reflexion | 前者纯自评、反思用完即弃；后者由外部评估器判定、反思累积 |
 
@@ -150,17 +152,15 @@ Reflexion             10            10            10
 **关于工作流引擎**：线性五阶段只有一条主路径和一条失败短路，没有分支、并发、循环。
 这种形状引入引擎不产生收益，只多一层需要理解和调试的抽象。所以 `StateMachineOrchestrator`
 就是一个循环加一个异常判断。真正需要引擎的是 `SubgraphOrchestrator` 那种形状 ——
-它的不同支路还可以挂不同的推理模式：命名类走 ReWOO 省 token，认知复杂度类走
-Reflexion 包 ReAct 换准确率。这是两轴分离带来的最直接的好处。
+它的不同支路还可以挂不同的推理模式，例如命名类走 ReWOO，复杂问题走
+Reflexion 包 ReAct。是否节省 token 或提高质量，需要在相同任务和验收条件下测量。
 
 ---
 
 ## 🔌 ② 接入层：连接器是可插拔的
 
-大多数 Agent 框架把外部系统集成做成「给 Agent 用的工具」，调用要经过 LLM 的 tool loop。
-但拉任务、建 PR 这些阶段属于确定性编排，一旦过模型，确定性与不确定性的分离当场就塌。
-
-所以底盘的连接器是**独立可直接调用**的，Agent 想用时再由编排器包装成工具暴露给它。
+任务读取、交付等阶段可以由确定性代码直接调用接口；需要模型选择的操作再包装成工具。
+底盘的连接器是**独立可直接调用**的，Agent 想用时再由编排器包装成工具暴露给它。
 同一个能力可以两边都出现，但走的是两条路。
 
 内置 `mock` / `mcp.stdio` / `mcp.http` / `rest`。加新的只需注册一个类：
@@ -192,9 +192,8 @@ mgr.call("scanner",
 
 💡 **时机比内容更重要。**
 
-同一份 ABP 规范，注入在决策层的 system prompt 里，Agent 就变成了「懂 ABP 的 Agent」，
-换技术栈要改 Agent；注入在调用外部执行器之前的最后一步，Agent 始终是「不知道 ABP
-是什么的 Agent」，换技术栈只改 markdown 文件。
+项目规范可以在执行器调用前按任务和阶段提供，让通用流程与知识内容分开维护。
+只有变化局限于既有知识内容时，才可能只改 Markdown；更换技术栈若涉及工具、接口或判据，也需要调整项目代码。
 
 底盘把六个时机做成显式枚举，每个 provider 声明自己在哪些时机生效：
 
@@ -203,7 +202,7 @@ mgr.call("scanner",
 | `AGENT_BOOT` | 决策层 system prompt。**底盘刻意建议留空** |
 | `TASK_ADMITTED` | 任务准入后，补充任务级背景 |
 | `BEFORE_TOOL` | 每次工具调用前，约束单次调用 |
-| `BEFORE_EXECUTOR` | 调外部执行器前的最后一步。**生产实际用的点** |
+| `BEFORE_EXECUTOR` | 调外部执行器前收集知识；当前真实模型参考路径在每次模型请求前触发 |
 | `ON_RETRY` | 重试前，把上次失败原因回灌 |
 | `BEFORE_VERDICT` | 裁定前，补充判定口径 |
 
@@ -214,7 +213,7 @@ SkillProvider(skills, points=[InjectionPoint.BEFORE_EXECUTOR])
 改成 `AGENT_BOOT` 也能跑，但装配报告会显示决策层不再干净。
 底盘不禁止，只是把这个选择变成一行显式代码，而不是藏在 prompt 拼接里的隐式约定。
 
-**两级路由**：规范类知识是确定性的，不需要相似度检索。路由规则本身承载工程判断：
+**两级路由**：当前使用显式规则选择规范，不做相似度检索。规则需要由项目提供：
 
 ```python
 SkillLibrary(root="skills", rules=[
@@ -231,17 +230,15 @@ SkillLibrary(root="skills", rules=[
 
 ## 🧹 ④ 失败契约：失败之后系统留下什么
 
-✅ 默认要求是零副作用：落库标记、去重防重试、干净退出、不阻塞下一条。
-被消耗的只有算力，不是人力。
+默认失败策略记录终态、去重，并执行项目已注册的清理回调；它不会自动撤销所有外部副作用，也不保证无需人工处理。
 
-🧽 还有一个容易被忽略的对偶：**开工前的清理**。不只是失败后不留残骸，
-而是每轮开始前假设上一轮可能留了残骸并强行清理。长期无人值守必须这么假设。
+`WorkspaceGuard` 可在开工前运行项目提供的检查或准备回调。处理范围应是任务自己的资源，不覆盖用户已有修改。以下函数由业务方实现：
 
 ```python
 policy = ZeroSideEffectPolicy(Ledger("state/ledger.json"))
 policy.register_cleanup("丢弃未推送的工作分支", discard_branch)
 
-guard = WorkspaceGuard().add("reset --hard + clean -fd", reset_workspace)
+guard = WorkspaceGuard().add("检查任务工作区", check_task_workspace)
 ```
 
 去重表同时是失败表，失败过的任务默认不再重试。这是个明确的取舍：
@@ -368,18 +365,16 @@ examples/                 五个可直接运行的演示
 
 ## 🏭 与生产实现的关系
 
-底盘的抽象来自两套已在生产运行的系统：
+仓库原有设计说明将以下两个项目列为抽象来源；这不等于本仓库当前版本已完成企业生产验证：
 
 | 仓库 | 贡献的抽象 |
 |---|---|
 | [SonarqubeAutoFlow-public](https://github.com/TIMPICKLE/SonarqubeAutoFlow-public) | `BaseTool` 与 `ToolRegistry` 两阶段选择、手写 ReAct 循环、子图重构设计 |
 | [SonarqubeAutoFlow_MAF](https://github.com/TIMPICKLE/SonarqubeAutoFlow_MAF) | `MCPManager` 工具名解析、Skills 两级路由、五阶段状态机、失败零副作用 |
 
-本仓库把两者的共同部分提取为可插拔的框架，并补上了它们各自缺的那一半：
-前者有工具抽象但编排写死，后者有编排但工具直接绑死在 Agent 上。
+本仓库提供可替换的载荷、编排、知识和接入边界，复用收益仍需同条件验证。
 
-📈 生产系统里这套底盘对应的载荷已累计执行 900 次以上，跨 3 个 BU、4 种语言，
-零主干污染。相关数据与设计论证见参赛材料。
+历史 README 曾记载来源系统“累计 900 次以上、3 个 BU、4 种语言、零主干污染”。仓库当前未附完整统计时间窗、原始记录及与此版本的映射，因此保留为待核验的来源项目背景，不作为本仓库成功率或生产成熟度证据。参赛引用前需补齐口径和材料。
 
 ---
 

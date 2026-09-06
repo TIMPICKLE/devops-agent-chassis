@@ -10,7 +10,7 @@
 
 ## 为什么调整
 
-前三阶段补齐了验收、知识消费、模型适配和证据，但实测主要是小型公开案例。旧 Live Assembly 允许生成确定性分类器；运行 Showcase 又使用预先编写的装配。两者尚未串成产品承诺的完整证据。第三阶段的执行异常与计量缺项仍保留，不通过改写历史结果美化进展。
+调整路线时，前三阶段实测主要是小型公开案例；旧 Live Assembly 允许生成确定性分类器，运行 Showcase 使用预先编写的装配，当时尚未串成产品承诺的完整证据。第四阶段已经跑通首个受限生成运行闭环，第五阶段增加知识更新验证。第三阶段的执行异常与计量缺项继续保留，不通过改写历史结果美化进展。
 
 ## 交付顺序
 
@@ -32,7 +32,7 @@ P1 首个任务选 C++ 引用相关构建失败修复。项目接受本地源码
 - 泛化检查：在生成后才提供的另一源码项目中运行同一员工，不为第二输入重新生成。
 - 失败分类：材料不足、生成失败、无法启动、模型异常、候选不合格分别记录，不退回模拟模式。
 
-初版员工项目依赖本仓库固定版本的 SDK/参考模块，不承诺生成任意业务系统，不另造通用自然语言工作流语言。
+初版员工项目依赖兼容的仓库检出和参考模块，记录受测源码版本但不自动检出或锁定 SDK；不承诺生成任意业务系统，不另造通用自然语言工作流语言。
 
 ## 取舍
 
@@ -44,7 +44,7 @@ P1 首个任务选 C++ 引用相关构建失败修复。项目接受本地源码
 
 参考 [Anthropic 长任务实践](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents)、[OpenAI 工程反馈闭环](https://openai.com/index/harness-engineering/)、[Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview)、[DeepSeek 插件架构](https://github.com/deepseek-ai/deepseek-harness)。生态已有通用能力，差异化需由业务装配和维护的增量收益证明。
 
-正式评分表和截止日期尚未确定，按已明确的前瞻性、实用性、扩展性组织工作。见 [当前 Backlog](BACKLOG.md)、[第四阶段实现与验证](../changelog/stage-04.md)。
+本次工作尚未获得正式评分表和截止日期，按已明确的前瞻性、实用性、扩展性组织工作。见 [当前 Backlog](BACKLOG.md)、[当前能力与证据](CURRENT_STATE.md)、[阶段变更](../changelog/README.md)。
 
 ## 第五阶段后的动态调整
 

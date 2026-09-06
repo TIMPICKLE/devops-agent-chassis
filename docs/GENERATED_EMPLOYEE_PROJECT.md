@@ -27,7 +27,7 @@ python tools/assemble_employee.py --request-dir employee_requests/build_repair -
 | request.snapshot.json、project.json | 需求、项目文件内容 ID 和生成版本 |
 | generation.*.json | 装配时的真实模型调用、结果与用量 |
 
-底盘公共 API、源码工具、真实模型适配器和编译检查由 `employee_factory/` 提供；模型生成项目接线，不重写编译器或复制模型客户端。首版限定为线性流程，允许 3–8 个节点，包含准备、一个模型修复节点和最终检查；不是通用工作流生成器。
+底盘公共 API 来自 `src/agent_chassis/`；`employee_factory/` 将其与源码工具、`adapters/` 的真实模型适配器和编译检查组合。模型生成项目接线，不重写编译器或复制模型客户端。首版限定为线性流程，允许 3–8 个节点，包含准备、一个模型修复节点和最终检查；不是通用工作流生成器。
 
 ## 3. 运行生成物
 
@@ -56,7 +56,7 @@ python tools/verify_employee_project.py --project reports/employee-demo/project 
 
 - 编译命令固定为 `c++ -std=c++17 -fsyntax-only -I . <unit>`；这是单编译单元语法/头文件检查，不是完整链接、行为测试或任意企业构建系统。
 - 支持最多 200 个常见 C++ 源码/头文件，总计 200000 字符；源文件最多 20000 字符，不修改其他业务代码。
-- 生成项目依赖本仓库固定版本的参考支持模块，尚未独立打包成 wheel。为了可复核，生成文件需与内容 ID 一致；更新既有知识内容并保留人工编辑请使用[版本化更新入口](EMPLOYEE_PROJECT_UPDATES.md)，不要直接篡改来源记录。通用流程变化仍待后续实现。
+- 生成项目需要兼容的本仓库检出和参考支持模块，尚未独立打包成 wheel。`code_ref` 记录源码版本，工具不会自动检出或锁定 SDK。为了可复核，生成文件需与内容 ID 一致；更新既有知识内容并保留人工编辑请使用[版本化更新入口](EMPLOYEE_PROJECT_UPDATES.md)。通用流程变化仍待后续实现。
 - 两个 CI 项目公开、可复现，不是企业生产数据或私有保留集；一轮成功不表示任意需求都能生成正确员工。
 
 [employee-project.yml](../.github/workflows/employee-project.yml) 在回归通过后执行完整链路。分支最后一笔提交包含 `[employee-live]`，或工作流可手动运行时选择 `live=true`，即可触发；普通提交只跑回归。生成最多 3 次、每个源码任务最多 6 次，合计最多 15 次模型请求，使用既有 Actions Secret。

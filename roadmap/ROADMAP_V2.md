@@ -19,7 +19,7 @@
 
 - [IMPLEMENTATION.md](./IMPLEMENTATION.md)：实际实现、验证记录、参赛展示入口与剩余工作
 - [VALIDATION.md](./VALIDATION.md)：已完成的本地 / Actions / 真实模型验证及代码快照
-- [CURRENT_STATE.md](./CURRENT_STATE.md)：已核实事实、两个最小复现、尚未验证的边界
+- [历史审计基线](AUDIT_BASELINE_V2.md)：本版当时的事实、两个最小复现及验证边界；[当前状态](CURRENT_STATE.md)另行维护
 - [BACKLOG_V2.md](./BACKLOG_V2.md)：原 8 个近期任务、依赖、验收门槛与条件性扩展
 - [RESEARCH.md](./RESEARCH.md)：公平横向比较、评测设计、标准依据与适用限制
 
@@ -75,7 +75,7 @@
 1. **验收接线遗漏。** 只通过 `with_payload(source, criteria)` 配置验收器，而编排器未另传 criteria 时，任务可能直接成功，验收器一次也不执行。
 2. **判据失败未清理。** 编排器返回 FAILED 时，Chassis 只记账；注册的 cleanup 没有执行。
 
-它们影响底盘最核心的承诺，已先于扩展实现处理。历史复现见 [CURRENT_STATE.md](./CURRENT_STATE.md)；当前行为以 [合同回归测试](../tests/test_roadmap_contracts.py) 为准。
+它们影响底盘最核心的承诺，已先于扩展实现处理。历史复现见[审计基线](AUDIT_BASELINE_V2.md)；当前行为以 [合同回归测试](../tests/test_roadmap_contracts.py) 为准。
 
 同时需区分：
 
