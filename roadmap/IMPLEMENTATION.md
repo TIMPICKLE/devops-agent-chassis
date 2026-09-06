@@ -1,6 +1,6 @@
 # Roadmap 实施记录 · 第一阶段
 
-> 本文保留第一阶段实施快照。当前新增功能、Actions 运行范围和验证结果见[阶段变更概览](../changelog/README.md)与[第二阶段记录](../changelog/stage-02.md)。
+> 本文保留第一阶段实施快照。当前新增功能、Actions 范围和结果见[阶段变更概览](../changelog/README.md)与[第三阶段记录](../changelog/stage-03.md)；[第二阶段记录](../changelog/stage-02.md)保留上一轮实测。
 
 更新：2026-09-05。开发分支：`feat/roadmap-showcase-v1`；起点：`bdd2b0a`。本阶段优先前瞻性与可拓展性，未建设新的安全平台，也未合并主分支。
 

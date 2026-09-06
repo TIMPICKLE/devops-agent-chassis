@@ -55,4 +55,6 @@ python tools/verify_policy_workflow.py reports/config-live --require-live
 
 Actions 先运行 Python 3.9 / 3.13 回归，再执行 24 个真实模型试次，最多 48 次请求。工作流与产物链接见[第三阶段记录](../changelog/stage-03.md)。基线未通过验收属于有效测量；routed 未全通过、执行异常或独立核验失败会使工作流失败。
 
+触发方式：`feat/roadmap-*` 分支推送的最后一笔提交信息包含 `[roadmap-stage3-live]`；或在工作流可手动运行时选择 `policy_live=true`。普通提交只跑回归与离线验证。使用既有 `BIGMODEL_API_KEY` Actions Secret。每次运行的 Actions Summary 提供概览，artifact 保留 14 天。
+
 四个案例是公开小样本，重复不增加独立任务数，没有企业私有保留集。完全结构化规则也能由确定性脚本实现；本例验证知识路由与模型流程的结合，不证明 AI 优于脚本。生产配置格式和企业真实规则仍需业务方接入。
