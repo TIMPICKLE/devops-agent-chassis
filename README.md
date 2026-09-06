@@ -20,11 +20,13 @@
 
 使用入口：[从需求生成员工项目，再运行与验收](docs/GENERATED_EMPLOYEE_PROJECT.md)。支持指定本地源码目录，生成与运行两个阶段分别记录模型证据。
 
+维护入口：[规范变化后更新员工项目](docs/EMPLOYEE_PROJECT_UPDATES.md)。预览影响、保留人工修改，并对新旧任务重新验收；实现回顾与 Actions 结果见[第五阶段](changelog/stage-05.md)。
+
 **第三阶段：[项目规范驱动的配置修复](docs/CONFIG_POLICY_WORKFLOW.md)**。按项目、环境和阶段匹配知识，通过四个实际节点生成并验收配置，配套冻结案例、三种知识策略对照与独立核验。进度与 Actions 结果见[第三阶段记录](changelog/stage-03.md)。
 
 第三阶段回归 177 项通过；真实模型 routed / full 各 8/8 验收通过，24 个试次证据核验通过。none 组 0/8，含 4 次执行异常，因此 live 工作流整体未通过。完整结果与成本计量限制见[实测说明](changelog/stage-03.md#真实模型结果--2026-09-06)。
 
-**快速了解每阶段变更：[变更概览](changelog/README.md)**。每项功能都记录用途、入口、测试与限制；最新见[第三阶段](changelog/stage-03.md)，此前成果见[第二阶段](changelog/stage-02.md)。
+**快速了解每阶段变更：[变更概览](changelog/README.md)**。每项功能都记录用途、入口、测试与限制；最新见[第五阶段](changelog/stage-05.md)，此前完整生成链路见[第四阶段](changelog/stage-04.md)。
 
 | 第二阶段新增 | 直接用途 |
 |---|---|

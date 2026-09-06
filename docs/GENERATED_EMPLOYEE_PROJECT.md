@@ -56,7 +56,7 @@ python tools/verify_employee_project.py --project reports/employee-demo/project 
 
 - 编译命令固定为 `c++ -std=c++17 -fsyntax-only -I . <unit>`；这是单编译单元语法/头文件检查，不是完整链接、行为测试或任意企业构建系统。
 - 支持最多 200 个常见 C++ 源码/头文件，总计 200000 字符；源文件最多 20000 字符，不修改其他业务代码。
-- 生成项目依赖本仓库固定版本的参考支持模块，尚未独立打包成 wheel。为了可复核，首版要求生成文件与内容 ID 一致；人工编辑和知识更新后的版本管理属于 P2。
+- 生成项目依赖本仓库固定版本的参考支持模块，尚未独立打包成 wheel。为了可复核，生成文件需与内容 ID 一致；更新既有知识内容并保留人工编辑请使用[版本化更新入口](EMPLOYEE_PROJECT_UPDATES.md)，不要直接篡改来源记录。通用流程变化仍待后续实现。
 - 两个 CI 项目公开、可复现，不是企业生产数据或私有保留集；一轮成功不表示任意需求都能生成正确员工。
 
 [employee-project.yml](../.github/workflows/employee-project.yml) 在回归通过后执行完整链路。分支最后一笔提交包含 `[employee-live]`，或工作流可手动运行时选择 `live=true`，即可触发；普通提交只跑回归。生成最多 3 次、每个源码任务最多 6 次，合计最多 15 次模型请求，使用既有 Actions Secret。

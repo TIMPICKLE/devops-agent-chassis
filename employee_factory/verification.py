@@ -17,7 +17,9 @@ def read_json(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def verify_project(directory, *, require_live=False):
+def verify_project(directory, *, require_live=False, _depth=0):
+    if _depth > 10:
+        raise ValueError("Reference verifier supports at most 10 project revisions")
     frozen = read_json(directory / "request.snapshot.json")
     project = read_json(directory / "project.json")
     _check_id(frozen)
@@ -31,6 +33,9 @@ def verify_project(directory, *, require_live=False):
     for name, text in frozen["documents"].items():
         if (directory / name).read_text(encoding="utf-8") != text:
             raise ValueError("Knowledge changed since generation; regenerate/version the project")
+    if "kind" in project:
+        from employee_factory.updates import verify_revision
+        return verify_revision(directory, frozen, project, manifest, require_live=require_live, depth=_depth)
     assembly = read_json(directory / "generation.manifest.json")
     evidence = read_json(directory / "generation.evidence.json")
     verify_documents(assembly, evidence, require_live=require_live)

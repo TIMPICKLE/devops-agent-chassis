@@ -26,6 +26,8 @@ def main(argv=None):
     if len({r["workspace_id"] for r in results}) != len(results):
         raise ValueError("Repeated workspace is not a second distinct input")
     summary = {"project_id": project["content_id"], "code_ref": project["code_ref"],
+               "project_kind": project.get("kind", "generated"),
+               "generation_inherited": "parent_project_id" in project,
                "generation_mode": generation["mode"], "generation_calls": len(generation["model_calls"]),
                "generation_usage": generation["usage"], "nodes": spec["nodes"], "tasks": results,
                "runtime_verified": bool(results), "distinct_inputs": len(results)}
@@ -34,6 +36,8 @@ def main(argv=None):
              f"独立验收通过的不同源码输入：{len(results)}。", "",
              "| 输入 | 模型调用 | 编译器退出码 | 独立验收 |", "|---|---:|---:|---|"]
     lines.extend(f"| {r['task_key']} | {r['model_calls']} | {r['compiler_exit']} | 通过 |" for r in results)
+    if summary["generation_inherited"]:
+        lines += ["", "该项目是知识更新版本：生成调用继承自原项目，更新过程没有重新生成代码或调用模型。"]
     lines += ["", "生成的节点：" + " → ".join(n["name"] for n in spec["nodes"]), "",
               "生成与运行分别留证；实际输入数量按上表统计。",
               "公开源码验收验证工程链路，不代表公司生产任务、私有保留集或通用项目生成成功率。",

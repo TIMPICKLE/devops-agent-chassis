@@ -65,9 +65,9 @@ def test_project_contract_rejects_missing_factory_and_incomplete_knowledge_bindi
         validate_project(SCRIPT, manifest, "usage", frozen)
 
 
-def build_test_project(tmp_path, monkeypatch):
+def build_test_project(tmp_path, monkeypatch, request=REQUEST):
     monkeypatch.setenv("EMPLOYEE_TEST_KEY", "test-only")
-    frozen = load_request(REQUEST)
+    frozen = load_request(request)
     config = ModelConfig("test", api_key_env="EMPLOYEE_TEST_KEY", max_calls=6)
     generation_requests = []
     def transport(url, headers, body, timeout):
