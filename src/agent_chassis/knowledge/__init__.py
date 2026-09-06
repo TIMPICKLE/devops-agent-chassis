@@ -32,6 +32,10 @@ from ..contracts import (
 
 knowledge_registry = Registry("knowledge-provider")
 
+from .scoped import ScopedKnowledge
+
+knowledge_registry.register("scoped")(ScopedKnowledge)
+
 
 class InjectionScheduler:
     """在每个时机上收集应当注入的知识，并留下可审计的记录。"""
@@ -245,6 +249,7 @@ class RetryFeedback(KnowledgeProvider):
 
 
 __all__ = [
+    "ScopedKnowledge",
     "InjectionScheduler",
     "SkillLibrary",
     "SkillProvider",
