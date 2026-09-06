@@ -16,6 +16,8 @@
 
 ### Roadmap 实现分支
 
+**当前按 [Roadmap v3](roadmap/README.md) 开发：需求输入 → 生成员工项目 → 运行源码任务 → 独立验收。** 首条完整链路与实际验证见[第四阶段](changelog/stage-04.md)；前三阶段作为基础能力保留。
+
 **第三阶段：[项目规范驱动的配置修复](docs/CONFIG_POLICY_WORKFLOW.md)**。按项目、环境和阶段匹配知识，通过四个实际节点生成并验收配置，配套冻结案例、三种知识策略对照与独立核验。进度与 Actions 结果见[第三阶段记录](changelog/stage-03.md)。
 
 第三阶段回归 177 项通过；真实模型 routed / full 各 8/8 验收通过，24 个试次证据核验通过。none 组 0/8，含 4 次执行异常，因此 live 工作流整体未通过。完整结果与成本计量限制见[实测说明](changelog/stage-03.md#真实模型结果--2026-09-06)。
@@ -379,5 +381,4 @@ examples/                 五个可直接运行的演示
 
 ## 🚧 状态
 
-早期版本。契约层已稳定，`mcp.stdio` 与 `mcp.http` 连接器留了接入点但未接真实 SDK
-（示例用 `mock` 跑通全链路）。欢迎按 `Connector` 契约补齐。
+早期版本。`mcp.stdio` 与 `mcp.http` 已有可选 SDK 适配和传输回归；公司具体接口仍需接入验证。当前能力与限制以[变更概览](changelog/README.md)和对应 Actions 实测为准。
