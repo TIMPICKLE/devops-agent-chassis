@@ -36,4 +36,12 @@ T01 附带的 Windows 换行修复保留：将唯一一处 `Path.write_text(newl
 
 ## 提交与 CI
 
-代码提交后在本节补录对应提交与 CI 链接；本地通过不替代远端 CI 或企业 live 验证。
+受测代码：[bc4d27026226a544b031097e218c4668829f5e19](https://github.com/TIMPICKLE/devops-agent-chassis/commit/bc4d27026226a544b031097e218c4668829f5e19)。
+
+| CI | 结果与范围 |
+|---|---|
+| [Roadmap 合同与可移植证据](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34145777460) | Python 3.9 / 3.13 两个合同任务通过；含回归、双载荷 × 三流程、离线上下文与 policy 证据核验 |
+| [Employee Project](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34145777529) | 通过：需求生成与运行期独立验收回归 |
+| [Employee Update](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34145777494) | 通过：更新保留定制与变化行为回归 |
+
+付费 live 任务按配置跳过。后续提交仅补录本表，不扩大 `bc4d270` 的验证范围；以上结果不代表企业实机或真实模型性能验证。
