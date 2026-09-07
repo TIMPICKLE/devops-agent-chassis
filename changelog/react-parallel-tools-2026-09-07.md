@@ -22,7 +22,17 @@
 - 已验证：新增 53 项测试，完整回归 **265 passed**（含真实 MCP stdio/http 测试）。并发用同步屏障证明，不依赖时延阈值。
 - 已验证：`python examples/06_parallel_tools.py`，两个工作线程、一次推理轮次、两个工具动作、零模型请求；`python examples/04_swap_payload.py` 两种旧载荷运行通过。
 - 已验证：OpenAI / Anthropic 模型替身响应均驱动真实线程并发；下一轮观察包含逐调用 ID/参数/结果，可移植证据通过公开 schema 和内容核验器。
-- 待核验：提交后的远端 CI。此次未调用真实付费模型、未连接企业服务器。
+- 已验证：代码提交 `2ef46c13a8ce2fad1d7bf376ca32ebc40cd55c0a` 的三条远端 CI 全部成功，详情如下。此次未调用真实付费模型、未连接企业服务器。
+
+## GitHub Actions 验证
+
+| 工作流 | 结果 | 范围 |
+|---|---|---|
+| [Roadmap 合同与可移植证据](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34094496749) | success | Python 3.9 / 3.13 回归；双载荷三种流程、上下文对照、四节点配置工作流及证据核验；MCP 在 3.13 测试，付费 live 作业按既有条件跳过 |
+| [员工项目生成与运行合同](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34094496754) | success | 既有项目创建/运行验证工作流 |
+| [员工规范更新与行为验证](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34094496900) | success | 既有受限更新、保留人工修改及行为验证工作流 |
+
+这些运行对应上面的代码提交；后续补录 CI 链接的提交仅修改本 changelog，不扩大 live 验证范围。
 
 ## 测试与复核中处理的问题
 
