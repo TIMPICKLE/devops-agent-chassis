@@ -147,6 +147,8 @@ def add_model_arguments(parser):
     parser.add_argument("--max-tokens", type=int, default=2048)
     parser.add_argument("--context-max-chars", type=int, default=12000)
     parser.add_argument("--timeout", type=float, default=60.0)
+    parser.add_argument("--openai-omit-parallel-tool-calls", action="store_true",
+                        help="OpenAI only: omit the wire parameter for incompatible gateways; still reject multiple calls")
 
 
 def model_config(args):
@@ -154,7 +156,8 @@ def model_config(args):
     return ModelConfig(model=args.model or os.environ.get(prefix + "_MODEL", "glm-5.3-flash"),
                        base_url=args.base_url or os.environ.get(prefix + "_BASE_URL", DEFAULT_ENDPOINTS[args.protocol]),
                        api_key_env=args.api_key_env, max_calls=args.max_calls, max_tokens=args.max_tokens,
-                       timeout=args.timeout, context_max_chars=args.context_max_chars)
+                       timeout=args.timeout, context_max_chars=args.context_max_chars,
+                       openai_parallel_tool_calls=None if args.openai_omit_parallel_tool_calls else False)
 
 
 def main(argv=None):

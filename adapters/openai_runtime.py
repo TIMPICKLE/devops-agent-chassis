@@ -2,6 +2,8 @@
 
 This implements the common single-function-call subset, not the Responses API
 or universal compatibility with every provider's optional parameters.
+Requests disable parallel tool calls by default. Explicit wire-parameter omission
+does not relax response validation or cause automatic retries.
 """
 import json
 
@@ -18,13 +20,16 @@ class OpenAIChatDecider(RuntimeDecider):
         return {"Authorization": "Bearer " + key, "content-type": "application/json"}
 
     def request_body(self, user_input, tools):
-        return {"model": self.config.model, "max_tokens": self.config.max_tokens, "stream": False,
+        body = {"model": self.config.model, "max_tokens": self.config.max_tokens, "stream": False,
                 "messages": [{"role": "system", "content": SYSTEM_PROMPT},
                              {"role": "user", "content": user_input}],
                 "tools": [{"type": "function", "function": {
                     "name": tool["name"], "description": tool["description"],
                     "parameters": tool["input_schema"],
                 }} for tool in tools], "tool_choice": "auto"}
+        if self.config.openai_parallel_tool_calls is not None:
+            body["parallel_tool_calls"] = False
+        return body
 
     def parse_response(self, response):
         choices = response.get("choices")
@@ -45,7 +50,11 @@ class OpenAIChatDecider(RuntimeDecider):
         if calls:
             if finish != "tool_calls":
                 raise ModelError("Tool call is inconsistent with finish_reason")
-            if len(calls) != 1 or not isinstance(calls[0], dict) or calls[0].get("type") != "function":
+            if len(calls) > 1:
+                # Reject the entire batch before selecting/parsing any action.
+                # Names and arguments may contain sensitive data; report count only.
+                raise ModelError(f"Expected at most one function call, received {len(calls)}; no tools executed")
+            if not isinstance(calls[0], dict) or calls[0].get("type") != "function":
                 raise ModelError("Expected one function call")
             function = calls[0].get("function")
             if not isinstance(function, dict) or not isinstance(function.get("arguments"), str):

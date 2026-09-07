@@ -68,6 +68,9 @@ class ModelConfig:
     timeout: float = 60.0
     max_calls: int = 8
     context_max_chars: int = 12000
+    # OpenAI wire control only: False disables batching; None explicitly omits
+    # the parameter for gateways that reject it. Neither enables batch execution.
+    openai_parallel_tool_calls: Optional[bool] = False
 
     def __post_init__(self):
         url = urlsplit(self.base_url)
@@ -77,6 +80,8 @@ class ModelConfig:
             raise ValueError("Model, key reference and positive limits are required")
         if self.context_max_chars < 0:
             raise ValueError("context_max_chars cannot be negative")
+        if self.openai_parallel_tool_calls is not False and self.openai_parallel_tool_calls is not None:
+            raise ValueError("openai_parallel_tool_calls must be False or None (omit)")
 
 
 class RuntimeDecider:
