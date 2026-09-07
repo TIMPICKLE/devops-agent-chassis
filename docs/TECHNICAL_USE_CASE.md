@@ -87,6 +87,8 @@ def make_flow(prepare, classify, decider, toolbox, compile_check):
 
 有条件分流时，AI 可以生成 `SubgraphOrchestrator` 的分析子图、路由函数和分支；分支逻辑仍是代码。当前 `LLMCompilerPattern` 按依赖分波执行，波内串行，不能描述成已实现并行 DAG 执行引擎。
 
+ReAct 已增加[独立工具并行调用](PARALLEL_TOOLS.md)：装配代码声明 `parallel_safe=True` 并开启并发上限后，一轮可执行多个独立动作，收齐观察再决策。默认单调用；上下文工具、共享候选写入及有依赖动作仍须单独调用。这项能力不扩大其他推理模式的验证范围。
+
 源码：[节点与编排](../src/agent_chassis/orchestration/__init__.py) · [推理模式与 PlanNode](../src/agent_chassis/orchestration/reasoning.py)。
 
 ## 4. 知识应该在哪一步注入，底盘怎么知道？

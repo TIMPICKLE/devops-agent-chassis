@@ -2,7 +2,7 @@
 
 ModelConfig, ModelError and post_json remain importable here for compatibility.
 """
-from adapters.runtime import ModelConfig, ModelError, RuntimeDecider, SYSTEM_PROMPT, post_json
+from adapters.runtime import ModelConfig, ModelError, RuntimeDecider, ToolRequest, post_json
 
 
 class AnthropicDecider(RuntimeDecider):
@@ -15,8 +15,8 @@ class AnthropicDecider(RuntimeDecider):
 
     def request_body(self, user_input, tools):
         return {"model": self.config.model, "max_tokens": self.config.max_tokens,
-                "system": SYSTEM_PROMPT, "messages": [{"role": "user", "content": user_input}],
-                "tools": tools, "tool_choice": {"type": "auto", "disable_parallel_tool_use": True}}
+                "system": self.system_prompt, "messages": [{"role": "user", "content": user_input}],
+                "tools": tools, "tool_choice": {"type": "auto", "disable_parallel_tool_use": self.config.max_parallel_tools < 2}}
 
     def parse_response(self, response):
         content = response.get("content")
@@ -28,9 +28,10 @@ class AnthropicDecider(RuntimeDecider):
         if calls:
             if response.get("stop_reason") != "tool_use":
                 raise ModelError("Tool call is inconsistent with stop_reason")
-            if len(calls) != 1:
+            if len(calls) > 1 and self.config.max_parallel_tools < 2:
                 raise ModelError("Expected one tool call, received multiple")
-            return "call", calls[0].get("name"), calls[0].get("input")
+            return self.normalize_calls([ToolRequest(call.get("id", ""), call.get("name"), call.get("input"))
+                                         for call in calls])
         if response.get("stop_reason") == "end_turn":
             return "stop", "model ended its turn; awaiting independent verification", None
         raise ModelError("Model did not return a supported tool call or end_turn")

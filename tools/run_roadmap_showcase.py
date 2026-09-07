@@ -67,7 +67,7 @@ def assemble(scenario, *, mode="live", flow="nested", config=None, code_ref="unk
         decider = offline_decide if mode == "offline" else adapter(config, tool_names=toolbox.names())
     execution_mode = ("offline-contract" if decider is offline_decide else
                       decider.execution_mode if isinstance(decider, RuntimeDecider) else "test-decider")
-    pattern = ReActPattern(decider, max_iterations=config.max_calls,
+    pattern = ReActPattern(decider, **config.react_options(),
                           stop_when=(lambda t, c: submission_ready(candidate, c)) if stop_policy == "objective" else None)
     if flow == "single_agent":
         orchestrator = SingleAgentOrchestrator(toolbox, pattern)
@@ -147,8 +147,13 @@ def add_model_arguments(parser):
     parser.add_argument("--max-tokens", type=int, default=2048)
     parser.add_argument("--context-max-chars", type=int, default=12000)
     parser.add_argument("--timeout", type=float, default=60.0)
+    parser.add_argument("--max-parallel-tools", type=int, default=1,
+                        help="Enable independent tool batches with this concurrency limit (default: 1)")
+    parser.add_argument("--max-batch-calls", type=int, default=8)
+    parser.add_argument("--max-tool-calls", type=int, default=64,
+                        help="Task-wide tool action budget, including failed attempts")
     parser.add_argument("--openai-omit-parallel-tool-calls", action="store_true",
-                        help="OpenAI only: omit the wire parameter for incompatible gateways; still reject multiple calls")
+                        help="OpenAI only: omit the wire parameter; local concurrency limits still apply")
 
 
 def model_config(args):
@@ -157,7 +162,9 @@ def model_config(args):
                        base_url=args.base_url or os.environ.get(prefix + "_BASE_URL", DEFAULT_ENDPOINTS[args.protocol]),
                        api_key_env=args.api_key_env, max_calls=args.max_calls, max_tokens=args.max_tokens,
                        timeout=args.timeout, context_max_chars=args.context_max_chars,
-                       openai_parallel_tool_calls=None if args.openai_omit_parallel_tool_calls else False)
+                       max_parallel_tools=args.max_parallel_tools, max_batch_calls=args.max_batch_calls,
+                       max_tool_calls=args.max_tool_calls,
+                       openai_parallel_tool_calls=None if args.openai_omit_parallel_tool_calls else args.max_parallel_tools > 1)
 
 
 def main(argv=None):

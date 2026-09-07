@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import time
+import inspect
 from copy import deepcopy
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
@@ -51,6 +52,7 @@ from .reasoning import (
     PlanNode,
     Planner,
     ReActPattern,
+    ToolRequest,
     ReWOOPattern,
     Reflector,
     ReflexionPattern,
@@ -125,12 +127,19 @@ class ToolBox:
         self._desc: Dict[str, str] = {}
         self._input_schemas: Dict[str, Dict[str, Any]] = {}
         self._contextual: set = set()
+        self._parallel_safe: set = set()
 
     def add(
         self, name: str, fn: Callable[..., Any], description: str = "",
         *, input_schema: Optional[Dict[str, Any]] = None,
+        parallel_safe: bool = False,
     ) -> "ToolBox":
+        if type(parallel_safe) is not bool:
+            raise ValueError("parallel_safe must be a boolean")
         self._tools[name] = fn
+        self._parallel_safe.discard(name)
+        if parallel_safe:
+            self._parallel_safe.add(name)
         self._contextual.discard(name)
         self._input_schemas.pop(name, None)
         if input_schema is not None:
@@ -150,6 +159,17 @@ class ToolBox:
 
     def names(self) -> List[str]:
         return list(self._tools)
+
+    def is_parallel_safe(self, name: str) -> bool:
+        """Assembly declaration: independent, thread-safe, no shared RunContext mutations."""
+        return name in self._parallel_safe and name not in self._contextual
+
+    def validate_parallel_call(self, name: str, args: Dict[str, Any]) -> None:
+        if not self.is_parallel_safe(name):
+            raise ValueError("Batch contains an unknown or non-parallel-safe tool")
+        # Validate the whole batch before any worker starts. Permission checks
+        # remain in tool wrappers; parallel_safe never grants capabilities.
+        inspect.signature(self._tools[name]).bind(**args)
 
     def schema(self) -> List[Dict[str, Any]]:
         return [dict(
@@ -464,6 +484,7 @@ __all__ = [
     "PlanNode",
     "Planner",
     "ReActPattern",
+    "ToolRequest",
     "ReWOOPattern",
     "Reflector",
     "ReflexionPattern",

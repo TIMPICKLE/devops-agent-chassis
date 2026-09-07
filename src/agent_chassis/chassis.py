@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import time
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -114,6 +115,9 @@ class Chassis:
         )
         self._active_verdict: ContextVar[Optional[Verdict]] = ContextVar(
             f"agent_chassis_active_verdict_{id(self)}", default=None
+        )
+        self._connector_buffer: ContextVar[Optional[List[ToolCall]]] = ContextVar(
+            f"agent_chassis_connector_buffer_{id(self)}", default=None
         )
 
     # ── ① 编排契约 ──────────────────────────────────────
@@ -341,6 +345,10 @@ class Chassis:
         self.observers.on_injection(inj, task, ctx)
 
     def _on_connector_call(self, call: ToolCall) -> None:
+        buffer = self._connector_buffer.get()
+        if buffer is not None:
+            buffer.append(call)
+            return
         active = self._active_run.get()
         if active is None:
             # 装配期 discovery、任务源拉取、健康检查等没有 task/run 上下文；
@@ -349,6 +357,16 @@ class Chassis:
         task, ctx = active
         ctx.tool_calls.append(call)
         self.notify_tool_call(call, task, ctx)
+
+    @contextmanager
+    def capture_connector_calls(self):
+        """Buffer worker-local connector telemetry for coordinator-thread replay."""
+        calls: List[ToolCall] = []
+        token = self._connector_buffer.set(calls)
+        try:
+            yield calls
+        finally:
+            self._connector_buffer.reset(token)
 
     def close(self) -> None:
         self.connectors.close()

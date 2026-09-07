@@ -60,7 +60,8 @@ class EvidenceObserver(Observer):
                             "content_hash": item.content_hash, "version": item.version, "chars": item.chars}
                            for item in ctx.injections],
             "context_receipts": [asdict(receipt) for receipt in ctx.context_receipts],
-            "tool_calls": [{"name": call.name, "ok": call.ok, "elapsed_ms": call.elapsed_ms}
+            "tool_calls": [{"name": call.name, "ok": call.ok, "elapsed_ms": call.elapsed_ms,
+                            **({"call_id": call.call_id, "batch_id": call.batch_id} if call.call_id else {})}
                            for call in ctx.tool_calls],
             "model_calls": model_calls,
             "usage": {

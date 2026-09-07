@@ -1,13 +1,13 @@
 """OpenAI-compatible, non-streaming Chat Completions function-call adapter.
 
-This implements the common single-function-call subset, not the Responses API
+This implements single calls and opt-in independent batches, not the Responses API
 or universal compatibility with every provider's optional parameters.
 Requests disable parallel tool calls by default. Explicit wire-parameter omission
 does not relax response validation or cause automatic retries.
 """
 import json
 
-from adapters.runtime import ModelError, RuntimeDecider, SYSTEM_PROMPT
+from adapters.runtime import ModelError, RuntimeDecider, ToolRequest
 
 
 class OpenAIChatDecider(RuntimeDecider):
@@ -21,14 +21,14 @@ class OpenAIChatDecider(RuntimeDecider):
 
     def request_body(self, user_input, tools):
         body = {"model": self.config.model, "max_tokens": self.config.max_tokens, "stream": False,
-                "messages": [{"role": "system", "content": SYSTEM_PROMPT},
+                "messages": [{"role": "system", "content": self.system_prompt},
                              {"role": "user", "content": user_input}],
                 "tools": [{"type": "function", "function": {
                     "name": tool["name"], "description": tool["description"],
                     "parameters": tool["input_schema"],
                 }} for tool in tools], "tool_choice": "auto"}
         if self.config.openai_parallel_tool_calls is not None:
-            body["parallel_tool_calls"] = False
+            body["parallel_tool_calls"] = self.config.openai_parallel_tool_calls
         return body
 
     def parse_response(self, response):
@@ -50,20 +50,25 @@ class OpenAIChatDecider(RuntimeDecider):
         if calls:
             if finish != "tool_calls":
                 raise ModelError("Tool call is inconsistent with finish_reason")
-            if len(calls) > 1:
+            if len(calls) > 1 and self.config.max_parallel_tools < 2:
                 # Reject the entire batch before selecting/parsing any action.
                 # Names and arguments may contain sensitive data; report count only.
                 raise ModelError(f"Expected at most one function call, received {len(calls)}; no tools executed")
-            if not isinstance(calls[0], dict) or calls[0].get("type") != "function":
-                raise ModelError("Expected one function call")
-            function = calls[0].get("function")
-            if not isinstance(function, dict) or not isinstance(function.get("arguments"), str):
-                raise ModelError("Invalid function arguments encoding")
-            try:
-                args = json.loads(function["arguments"])
-            except ValueError:
-                raise ModelError("Function arguments are not JSON") from None
-            return "call", function.get("name"), args
+            if len(calls) > self.config.max_batch_calls:
+                raise ModelError("Model response exceeds max_batch_calls; no tools executed")
+            parsed = []
+            for call in calls:
+                if not isinstance(call, dict) or call.get("type") != "function":
+                    raise ModelError("Expected function call")
+                function = call.get("function")
+                if not isinstance(function, dict) or not isinstance(function.get("arguments"), str):
+                    raise ModelError("Invalid function arguments encoding")
+                try:
+                    args = json.loads(function["arguments"])
+                except ValueError:
+                    raise ModelError("Function arguments are not JSON") from None
+                parsed.append(ToolRequest(call.get("id", ""), function.get("name"), args))
+            return self.normalize_calls(parsed)
         if finish == "stop":
             return "stop", "model ended its turn; awaiting independent verification", None
         raise ModelError("Model did not return a supported function call or stop")

@@ -2,7 +2,9 @@
 
 开发分支：`feat/roadmap-showcase-v1`。这里按阶段记录**已实现的功能、用途、验证结果与限制**；完整规划仍在 [Roadmap](../roadmap/README.md)。
 
-最新适配器修复：[OpenAI 单调用契约](openai-single-call-2026-09-07.md)。默认请求禁止多工具调用，允许明确不兼容的网关显式省略该参数；保留整批拒绝和用量记账，不改变底盘核心、不新增自动重试。
+最新能力：[ReAct 独立工具并行](react-parallel-tools-2026-09-07.md)。按用户确认的方向扩展批量动作、有限并发、失败等待与证据，OpenAI / Anthropic 共用配置；默认兼容单调用。见[使用说明](../docs/PARALLEL_TOOLS.md)。
+
+前序修复：[OpenAI 单调用契约](openai-single-call-2026-09-07.md)。当时仅补齐单调用防护；本次在保留默认行为的基础上提供显式并行能力。
 
 最新文档变化：[图解用户旅程重写](leaders-journey-2026-09-06.md)，用七步交互、四张流程图说明从需求到项目、任务结果及知识更新的全过程；README 顶部直达。
 

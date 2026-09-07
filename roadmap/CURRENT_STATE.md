@@ -1,11 +1,12 @@
 # 当前能力与验证状态
 
-更新：2026-09-06。分支：`feat/roadmap-showcase-v1`。本页汇总截至第五阶段的状态；早期缺陷复现保留在[历史审计基线](AUDIT_BASELINE_V2.md)，不作为当前缺陷清单。
+更新：2026-09-07。分支：`feat/roadmap-showcase-v1`。本页汇总第五阶段及后续底盘维护状态；早期缺陷复现保留在[历史审计基线](AUDIT_BASELINE_V2.md)，不作为当前缺陷清单。
 
 ## 已验证什么
 
 | 能力 | 当前实现与限制 | 证据 |
 |---|---|---|
+| ReAct 独立工具并行 | OpenAI / Anthropic 批量动作、有限线程并发、整批预检、失败等待、调用 ID；默认单调用，需声明工具可并行 | [本次实现与验证](../changelog/react-parallel-tools-2026-09-07.md)、[使用说明](../docs/PARALLEL_TOOLS.md)；未进行企业 live 性能测量 |
 | 需求生成可运行员工 | 模型生成 Python 节点接线、清单和说明；首版仅 C++ include 修复，复用共享工具与验收器 | [第四阶段真实链路](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34020348896)：一次生成，同一项目处理两个源码输入，独立验收通过 |
 | 规范更新并保留定制 | 只更新既有知识文件内容；预览影响、检测冲突、保留工作副本中的代码和自定义文件，创建新版本 | [第五阶段真实链路](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34033606604)：更新 0 次模型调用，新旧规范改变同一输入的选择，两个旧任务通过 |
 | 知识注入与消费 | 显式事件、任务/阶段匹配、版本和消费回执；不是通用语义路由或自动理解文档 | [第三阶段](../changelog/stage-03.md)、[第五阶段](../changelog/stage-05.md)；第三阶段整体 live 门禁仍为失败，不改写历史 |

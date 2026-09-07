@@ -24,7 +24,7 @@ class EmployeeKit:
         if decider is None:
             decider = (AnthropicDecider if protocol == "anthropic" else OpenAIChatDecider)(config, tool_names=self.toolbox.names())
         self.mode = decider.execution_mode if isinstance(decider, RuntimeDecider) else "test-decider"
-        self.pattern = ReActPattern(decider, max_iterations=config.max_calls,
+        self.pattern = ReActPattern(decider, **config.react_options(),
                                    stop_when=lambda t, c: submission_ready(self.candidate, c))
         self.providers = [ScopedKnowledge(text, name=name, version=content_id(text), fact_scope={"phase": "repair"})
                           for name, text in frozen["documents"].items()]

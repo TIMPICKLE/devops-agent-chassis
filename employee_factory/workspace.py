@@ -138,9 +138,9 @@ def workspace_tools(snapshot, candidate, criteria, boundary):
             raise ValueError("Read between 1 and 6 file paths")
         return {"files": [read_file(path) for path in paths]}
 
-    return (ToolBox().add("read_file", read_file, input_schema={
+    return (ToolBox().add("read_file", read_file, parallel_safe=True, input_schema={
         "type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"],
-        "additionalProperties": False}).add("read_files", read_files, input_schema={
+        "additionalProperties": False}).add("read_files", read_files, parallel_safe=True, input_schema={
         "type": "object", "properties": {"paths": {"type": "array", "items": {"type": "string"},
         "minItems": 1, "maxItems": 6}}, "required": ["paths"], "additionalProperties": False
         }).add("submit_source", submit_source, input_schema={

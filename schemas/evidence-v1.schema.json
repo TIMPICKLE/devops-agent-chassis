@@ -65,7 +65,9 @@
         "tool_calls": {
           "type": "array", "items": {
             "type": "object", "required": ["name", "ok", "elapsed_ms"], "additionalProperties": false,
-            "properties": {"name": {"type": "string"}, "ok": {"type": "boolean"}, "elapsed_ms": {"$ref": "#/$defs/count"}}
+            "properties": {"name": {"type": "string"}, "ok": {"type": "boolean"}, "elapsed_ms": {"$ref": "#/$defs/count"},
+              "call_id": {"type": "string", "minLength": 1}, "batch_id": {"type": "string", "minLength": 1}},
+            "dependentRequired": {"call_id": ["batch_id"], "batch_id": ["call_id"]}
           }
         },
         "model_calls": {"type": "array", "items": {"$ref": "#/$defs/model_call"}},

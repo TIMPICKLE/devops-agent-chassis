@@ -71,7 +71,7 @@ def assemble(case, snapshot, *, mode, context_policy, config, protocol="anthropi
         if criteria.validate(t).done:
             ctx.facts["verified_candidate"] = candidate.digests()["candidate_sha256"]
 
-    pattern = ReActPattern(decider, max_iterations=config.max_calls,
+    pattern = ReActPattern(decider, **config.react_options(),
                           stop_when=lambda t, ctx: submission_ready(candidate, ctx))
     flow = StateMachineOrchestrator([FnStep("prepare", prepare), FnStep("select_context", select_context),
                                     AgentStep("repair_config", pattern=pattern, toolbox=toolbox),

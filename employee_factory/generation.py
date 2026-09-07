@@ -62,7 +62,7 @@ def generate(frozen, config, *, protocol="anthropic", code_ref="unknown", decide
         decider = (AnthropicDecider if protocol == "anthropic" else OpenAIChatDecider)(config, tool_names=toolbox.names())
     mode = decider.execution_mode if isinstance(decider, RuntimeDecider) else "test-decider"
     observer = EvidenceObserver(code_ref=code_ref, mode=mode)
-    pattern = ReActPattern(decider, max_iterations=config.max_calls,
+    pattern = ReActPattern(decider, **config.react_options(),
                           stop_when=lambda t, c: "Valid project submitted" if candidate else None)
     chassis = (Chassis("employee-project-generator").with_payload(RequestSource(frozen), ProjectCriteria(candidate, frozen))
                .with_orchestrator(SingleAgentOrchestrator(toolbox, pattern)).with_boundary(borrowed_executor("project-writer"))

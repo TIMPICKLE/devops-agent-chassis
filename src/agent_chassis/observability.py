@@ -74,6 +74,8 @@ class ToolCallRecord:
     elapsed_ms: int
     args: Dict[str, Any] = field(default_factory=dict)
     error: str = ""
+    call_id: str = ""
+    batch_id: str = ""
 
 
 @dataclass
@@ -135,12 +137,13 @@ class RecordingObserver(Observer):
         self.tool_calls.append(ToolCallRecord(
             run_id=ctx.run_id, seq=self._call_seq, name=call.name,
             ok=call.ok, elapsed_ms=call.elapsed_ms,
-            args=call.args, error=call.error,
+            args=call.args, error=call.error, call_id=call.call_id, batch_id=call.batch_id,
         ))
         self.traces.append(TraceRecord(
             run_id=ctx.run_id, seq=self._next(), kind="tool_call",
             label=call.name, at_ms=ctx.ms(),
-            detail={"ok": call.ok, "error": call.error},
+            detail={"ok": call.ok, "error": call.error,
+                    **({"call_id": call.call_id, "batch_id": call.batch_id} if call.call_id else {})},
         ))
 
     def on_injection(self, inj: Injection, task: Task, ctx: RunContext) -> None:

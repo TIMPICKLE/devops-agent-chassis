@@ -84,6 +84,8 @@ class ToolCall:
     ok: bool = True
     error: str = ""
     elapsed_ms: int = 0
+    call_id: str = ""
+    batch_id: str = ""
 
 
 # ═══════════════════════════════════════════════════════════
@@ -397,6 +399,8 @@ class RunContext:
     context_receipts: List[ContextReceipt] = field(default_factory=list)
     #: 可选模型 adapter 的用量/时延元数据，不记录 Prompt 或隐藏思维。
     model_calls: List[Dict[str, Any]] = field(default_factory=list)
+    # Task-wide ReAct action budget, including failed calls and earlier attempts.
+    tool_actions_started: int = 0
 
     def context_for(
         self,

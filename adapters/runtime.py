@@ -16,12 +16,21 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from agent_chassis.contracts import InjectionPoint, RunContext, Task
+from agent_chassis.orchestration.reasoning import ToolRequest, validate_batch
 
 
 SYSTEM_PROMPT = (
     "Complete the supplied task using the available tools. Use one tool at a time. "
     "Use observations to decide the next action. Stop when the requested artifact "
     "is submitted. The external verifier, not your narrative, decides success."
+)
+PARALLEL_SYSTEM_PROMPT = (
+    "Complete the supplied task using the available tools. You may batch independent "
+    "calls only to tools whose descriptions declare parallel_safe=true. Tools without "
+    "that declaration must be called alone. Never batch calls that depend on another "
+    "call's result or affect the same mutable resource. Observe all batch results "
+    "before deciding the next action. Stop when the requested artifact is submitted. "
+    "The external verifier, not your narrative, decides success."
 )
 DEFAULT_ENDPOINTS = {
     "anthropic": "https://open.bigmodel.cn/api/anthropic",
@@ -68,9 +77,11 @@ class ModelConfig:
     timeout: float = 60.0
     max_calls: int = 8
     context_max_chars: int = 12000
-    # OpenAI wire control only: False disables batching; None explicitly omits
-    # the parameter for gateways that reject it. Neither enables batch execution.
+    # OpenAI wire control only; execution is independently bounded below.
     openai_parallel_tool_calls: Optional[bool] = False
+    max_parallel_tools: int = 1
+    max_batch_calls: int = 8
+    max_tool_calls: int = 64
 
     def __post_init__(self):
         url = urlsplit(self.base_url)
@@ -80,8 +91,17 @@ class ModelConfig:
             raise ValueError("Model, key reference and positive limits are required")
         if self.context_max_chars < 0:
             raise ValueError("context_max_chars cannot be negative")
-        if self.openai_parallel_tool_calls is not False and self.openai_parallel_tool_calls is not None:
-            raise ValueError("openai_parallel_tool_calls must be False or None (omit)")
+        if self.openai_parallel_tool_calls is not None and type(self.openai_parallel_tool_calls) is not bool:
+            raise ValueError("openai_parallel_tool_calls must be a boolean or None (omit)")
+        for value in (self.max_parallel_tools, self.max_batch_calls, self.max_tool_calls):
+            if type(value) is not int or value < 1:
+                raise ValueError("Tool execution limits must be positive integers")
+        if self.openai_parallel_tool_calls is True and self.max_parallel_tools < 2:
+            raise ValueError("openai_parallel_tool_calls=True requires max_parallel_tools >= 2")
+
+    def react_options(self):
+        return {"max_iterations": self.max_calls, "max_parallel_tools": self.max_parallel_tools,
+                "max_batch_calls": self.max_batch_calls, "max_tool_calls": self.max_tool_calls}
 
 
 class RuntimeDecider:
@@ -117,6 +137,21 @@ class RuntimeDecider:
     def parse_response(self, response):
         raise NotImplementedError
 
+    @property
+    def system_prompt(self):
+        if self.config.max_parallel_tools == 1:
+            return SYSTEM_PROMPT
+        return PARALLEL_SYSTEM_PROMPT + f" At most {self.config.max_batch_calls} calls per batch."
+
+    def normalize_calls(self, calls):
+        if len(calls) == 1:
+            return "call", calls[0].name, calls[0].args
+        if self.config.max_parallel_tools < 2:
+            raise ModelError(f"Expected at most one function call, received {len(calls)}; no tools executed")
+        if len(calls) > self.config.max_batch_calls:
+            raise ModelError("Model response exceeds max_batch_calls; no tools executed")
+        return "batch", calls, None
+
     def __call__(self, task: Task, ctx: RunContext, toolbox: Any) -> tuple:
         try:
             from jsonschema import Draft202012Validator
@@ -140,7 +175,11 @@ class RuntimeDecider:
             schema = spec["inputSchema"]
             Draft202012Validator.check_schema(schema)
             validators[name] = Draft202012Validator(schema)
-            tools.append({"name": name, "description": spec.get("description", ""), "input_schema": schema})
+            description = spec.get("description", "")
+            if config.max_parallel_tools > 1:
+                safe = getattr(toolbox, "is_parallel_safe", lambda _: False)(name)
+                description += " [parallel_safe=" + str(safe).lower() + "]"
+            tools.append({"name": name, "description": description, "input_schema": schema})
 
         # Direct-API path: this request IS the executor boundary. It does not put
         # technology-specific knowledge in AGENT_BOOT or in the Chassis core.
@@ -152,7 +191,9 @@ class RuntimeDecider:
         # Previous attempts may have been compensated. Keep their trace, but do
         # not tell the model that discarded artifacts are still present.
         attempt_calls = ctx.tool_calls[ctx.facts.get("attempt_tool_call_start", 0):]
-        observations = [{"tool": call.name, "result": call.result, "ok": call.ok}
+        observations = [{"tool": call.name, "result": call.result, "ok": call.ok,
+                         **({"args": call.args, "call_id": call.call_id, "batch_id": call.batch_id}
+                            if call.call_id else {})}
                         for call in attempt_calls if call.name in self.tool_names]
         user_input = json.dumps({"task": task.payload, "observations": observations,
                                  "context": context}, ensure_ascii=False, allow_nan=False)
@@ -176,12 +217,19 @@ class RuntimeDecider:
             record["request_id"] = str(response.get("id", ""))[:200]
             record["resolved_model"] = str(response.get("model", config.model))[:200]
             result = self.parse_response(response)
-            if result[0] == "call":
-                _, name, args = result
+            actions = ([ToolRequest("", result[1], result[2])] if result[0] == "call"
+                       else result[1] if result[0] == "batch" else [])
+            for action in actions:
+                name, args = action.name, action.args
                 if not isinstance(name, str) or name not in validators or not isinstance(args, dict):
                     raise ModelError("Unknown tool or invalid tool arguments")
                 if list(validators[name].iter_errors(args)):
                     raise ModelError("Tool arguments do not match inputSchema")
+            if result[0] == "batch":
+                try:
+                    validate_batch(toolbox, actions, config.max_batch_calls)
+                except (ValueError, TypeError):
+                    raise ModelError("Invalid batch IDs, unsafe tool or incompatible arguments; no tools executed") from None
             record["ok"] = True
             return result
         except Exception as exc:

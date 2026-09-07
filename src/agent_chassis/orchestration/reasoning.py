@@ -24,6 +24,9 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -44,8 +47,37 @@ reasoning_registry = Registry("reasoning-pattern")
 # ═══════════════════════════════════════════════════════════
 
 #: ReAct 用：给定当前状态，决定下一步
-#: 返回 ("call", tool_name, kwargs) 或 ("stop", reason, None)
+#: 返回 ("call", tool_name, kwargs)、("batch", [ToolRequest, ...], None)
+#: 或 ("stop", reason, None)。批次中的动作必须互相独立。
 Decide = Callable[[Task, RunContext, Any], tuple]
+
+
+@dataclass(frozen=True)
+class ToolRequest:
+    """One independent action within a ReAct batch; IDs are unique per batch."""
+    call_id: str
+    name: str
+    args: Dict[str, Any] = field(default_factory=dict)
+
+
+def validate_batch(toolbox: Any, requests: Any, limit: int) -> None:
+    if not isinstance(requests, (list, tuple)) or not 2 <= len(requests) <= limit:
+        raise ValueError("Batch size must be between 2 and max_batch_calls")
+    seen = set()
+    for request in requests:
+        if (not isinstance(request, ToolRequest) or not isinstance(request.call_id, str)
+                or not request.call_id or len(request.call_id) > 200 or request.call_id in seen
+                or not isinstance(request.name, str) or not isinstance(request.args, dict)):
+            raise ValueError("Invalid batch action or duplicate call ID")
+        seen.add(request.call_id)
+        validator = getattr(toolbox, "validate_parallel_call", None)
+        if not callable(validator):
+            raise ValueError("ToolBox must explicitly support parallel-safe validation")
+        validator(request.name, request.args)
+
+
+class BatchToolError(RuntimeError):
+    """All submitted workers have settled; caller may safely enter cleanup."""
 
 #: 线性规划器（Plan-and-Execute / Plan-and-Solve / ReWOO）：一次给出完整计划
 #: 返回 [(tool_name, kwargs), ...]；ReWOO 的 kwargs 里可写 "#E1" 引用前面步骤的结果
@@ -142,6 +174,81 @@ def _substitute(args: Dict[str, Any], evidence: Dict[str, Any]) -> Dict[str, Any
     return out
 
 
+def _invoke_batch(toolbox, requests, task, ctx, executor_tools, max_workers):
+    # No worker receives task/ctx. Injections, facts and observers stay on the
+    # coordinator thread. A copy also prevents aliased arguments racing.
+    requests = [deepcopy(request) for request in requests]
+    batch_id = f"react-{ctx.iterations}-{ctx.tool_actions_started}"
+    if ctx.chassis is not None:
+        for request in requests:
+            point = (InjectionPoint.BEFORE_EXECUTOR if request.name in executor_tools
+                     else InjectionPoint.BEFORE_TOOL)
+            ctx.chassis.inject(point, task, ctx)
+
+    completed = [None] * len(requests)
+
+    def execute(index, request):
+        started = time.monotonic()
+        capture = (ctx.chassis.capture_connector_calls() if ctx.chassis is not None
+                   else nullcontext([]))
+        with capture as nested:
+            try:
+                result = toolbox.call(request.name, **deepcopy(request.args))
+                rec = ToolCall(request.name, request.args, result=result)
+                error = None
+            except BaseException as exc:
+                rec = ToolCall(request.name, request.args, ok=False,
+                               error=f"{type(exc).__name__}: {exc}")
+                error = exc
+        rec.elapsed_ms = int((time.monotonic() - started) * 1000)
+        rec.call_id, rec.batch_id = request.call_id, batch_id
+        completed[index] = (rec, nested, error)
+        return rec, nested, error
+
+    # A submitted batch is an all-settled unit. Even on failure no worker may
+    # outlive reason(), race cleanup or be mistaken for a rolled-back action.
+    submission_error = None
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="react-tool") as pool:
+        futures = []
+        try:
+            for index, request in enumerate(requests):
+                futures.append(pool.submit(execute, index, request))
+        except BaseException as exc:
+            submission_error = exc
+        for future in futures:
+            future.result()
+    # submit() may enqueue work before failing to create another thread. Keep
+    # records for such work even if its Future was never returned to the caller.
+    outcomes = [outcome for outcome in completed if outcome is not None]
+    records = []
+    used_ids = {request.call_id for request in requests}
+    for rec, nested, _ in outcomes:
+        for index, call in enumerate(nested):
+            call.batch_id = batch_id
+            call.call_id = f"{rec.call_id}/connector-{index + 1}"
+            while call.call_id in used_ids:
+                call.call_id += "/nested"
+            used_ids.add(call.call_id)
+        records.extend([*nested, rec])
+        if rec.ok:
+            ctx.facts.setdefault("tool_results", {})[rec.name] = rec.result
+    # Preserve successful siblings on failure, and request order on completion.
+    ctx.tool_calls.extend(records)
+    if ctx.chassis is not None:
+        for rec in records:
+            ctx.chassis.notify_tool_call(rec, task, ctx)
+    errors = [error for _, _, error in outcomes if error is not None]
+    if submission_error is not None:
+        errors.append(submission_error)
+    if errors:
+        for error in errors:
+            if not isinstance(error, Exception):
+                raise error
+        if submission_error is not None:
+            raise BatchToolError("Parallel tool submission failed; all submitted calls settled") from None
+        raise BatchToolError(f"{len(errors)} of {len(requests)} parallel tools failed; all calls settled")
+
+
 # ═══════════════════════════════════════════════════════════
 #  ReAct：边想边做
 # ═══════════════════════════════════════════════════════════
@@ -165,16 +272,26 @@ class ReActPattern(ReasoningPattern):
         executor_tools: Sequence[str] = (),
         *,
         stop_when: Optional[Callable[[Task, RunContext], Optional[str]]] = None,
+        max_parallel_tools: int = 1,
+        max_batch_calls: int = 8,
+        max_tool_calls: int = 64,
     ) -> None:
+        for value in (max_parallel_tools, max_batch_calls, max_tool_calls):
+            if type(value) is not int or value < 1:
+                raise ValueError("Tool execution limits must be positive integers")
         self.decide = decide
         self.max_iterations = max_iterations
         self.executor_tools = list(executor_tools)
         # 可选的客观停止信号只结束推理；不会替代 Chassis 的最终验收。
         self.stop_when = stop_when
+        self.max_parallel_tools = max_parallel_tools
+        self.max_batch_calls = max_batch_calls
+        self.max_tool_calls = max_tool_calls
 
     def describe(self) -> str:
         description = super().describe()
-        return description + ("；支持客观检查后停止" if self.stop_when is not None else "")
+        return (description + ("；支持客观检查后停止" if self.stop_when is not None else "")
+                + f"；工具并发上限 {self.max_parallel_tools}，每批上限 {self.max_batch_calls}，任务调用上限 {self.max_tool_calls}")
 
     def reason(self, task: Task, ctx: RunContext, toolbox: Any) -> None:
         for _ in range(self.max_iterations):
@@ -184,9 +301,23 @@ class ReActPattern(ReasoningPattern):
                 ctx.facts["stop_reason"] = "model_stop"
                 ctx.note(f"[ReAct] 模型判断收敛：{target}")
                 return
-            if action != "call":
+            if action not in {"call", "batch"}:
                 raise ValueError(f"未知 ReAct 动作：{action!r}")
-            invoke_tool(toolbox, target, kwargs or {}, task, ctx, self.executor_tools)
+            if action == "batch":
+                if self.max_parallel_tools < 2:
+                    raise ValueError("Parallel tool execution is disabled")
+                if kwargs is not None:
+                    raise ValueError("Batch action must use None as its third element")
+                validate_batch(toolbox, target, self.max_batch_calls)
+            count = len(target) if action == "batch" else 1
+            if ctx.tool_actions_started + count > self.max_tool_calls:
+                ctx.facts["stop_reason"] = "tool_call_limit"
+                raise ValueError("Task-wide tool call budget exhausted")
+            ctx.tool_actions_started += count
+            if action == "batch":
+                _invoke_batch(toolbox, target, task, ctx, self.executor_tools, self.max_parallel_tools)
+            else:
+                invoke_tool(toolbox, target, kwargs or {}, task, ctx, self.executor_tools)
             if self.stop_when is not None:
                 reason = self.stop_when(task, ctx)
                 if reason is not None:
@@ -526,6 +657,8 @@ __all__ = [
     "PlanNode",
     "Planner",
     "ReActPattern",
+    "ToolRequest",
+    "BatchToolError",
     "ReWOOPattern",
     "Reflector",
     "ReflexionPattern",
