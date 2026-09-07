@@ -6,10 +6,10 @@ from dataclasses import asdict
 from agent_chassis import Chassis, borrowed_executor
 from agent_chassis.contracts import DoneCriteria, Task, TaskSource, Verdict
 from agent_chassis.evidence import EvidenceObserver, assembly_manifest
-from agent_chassis.orchestration import ReActPattern, SingleAgentOrchestrator, ToolBox
+from agent_chassis.orchestration import SingleAgentOrchestrator, ToolBox
 from adapters.anthropic_runtime import AnthropicDecider
 from adapters.openai_runtime import OpenAIChatDecider
-from adapters.runtime import RuntimeDecider
+from adapters.runtime import RuntimeDecider, react_pattern
 from employee_factory.contracts import API_GUIDE, validate_project
 
 
@@ -62,8 +62,8 @@ def generate(frozen, config, *, protocol="anthropic", code_ref="unknown", decide
         decider = (AnthropicDecider if protocol == "anthropic" else OpenAIChatDecider)(config, tool_names=toolbox.names())
     mode = decider.execution_mode if isinstance(decider, RuntimeDecider) else "test-decider"
     observer = EvidenceObserver(code_ref=code_ref, mode=mode)
-    pattern = ReActPattern(decider, **config.react_options(),
-                          stop_when=lambda t, c: "Valid project submitted" if candidate else None)
+    pattern = react_pattern(config, decider, toolbox=toolbox,
+                            stop_when=lambda t, c: "Valid project submitted" if candidate else None)
     chassis = (Chassis("employee-project-generator").with_payload(RequestSource(frozen), ProjectCriteria(candidate, frozen))
                .with_orchestrator(SingleAgentOrchestrator(toolbox, pattern)).with_boundary(borrowed_executor("project-writer"))
                .observe(observer).build())

@@ -9,14 +9,15 @@ from __future__ import annotations
 import json
 import os
 import time
+import warnings
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from agent_chassis.contracts import InjectionPoint, RunContext, Task
-from agent_chassis.orchestration.reasoning import ToolRequest, validate_batch
+from agent_chassis.orchestration.reasoning import ReActPattern, ToolRequest, validate_batch
 
 
 SYSTEM_PROMPT = (
@@ -102,6 +103,71 @@ class ModelConfig:
     def react_options(self):
         return {"max_iterations": self.max_calls, "max_parallel_tools": self.max_parallel_tools,
                 "max_batch_calls": self.max_batch_calls, "max_tool_calls": self.max_tool_calls}
+
+
+#: Executor limits that must agree between ModelConfig and ReActPattern.
+_ALIGNMENT_FIELDS = ("max_parallel_tools", "max_batch_calls", "max_tool_calls")
+
+
+def validate_react_alignment(config: ModelConfig, pattern: Any, toolbox: Any = None) -> List[str]:
+    """Fail before any model request or tool call when executor limits disagree.
+
+    Both sides hold execution limits independently: ModelConfig bounds what the
+    adapter accepts, ReActPattern bounds what the executor runs. A mismatch
+    stays silent until the model actually returns a multi-call batch, so it is
+    checked here at assembly time instead. Raises ValueError naming the field,
+    both values and the fix; returns non-fatal assembly hints.
+    """
+    missing = [name for name in _ALIGNMENT_FIELDS if not hasattr(pattern, name)]
+    if missing:
+        raise ValueError(
+            "Alignment check applies to ReActPattern-style executors; "
+            f"pattern is missing {missing}"
+        )
+    conflicts = []
+    for name in _ALIGNMENT_FIELDS:
+        model_side, executor_side = getattr(config, name), getattr(pattern, name)
+        if model_side == executor_side:
+            continue
+        if name == "max_parallel_tools":
+            detail = (f"model side allows batched calls ({model_side}) "
+                      f"while the executor concurrency limit is {executor_side}")
+        else:
+            detail = f"model side is {model_side} while the executor is {executor_side}"
+        conflicts.append(
+            f"{name} mismatch: {detail}. Build the pattern with "
+            "adapters.runtime.react_pattern(config, decider) or pass "
+            "**config.react_options() so both sides agree"
+        )
+    if conflicts:
+        raise ValueError("; ".join(conflicts))
+    hints: List[str] = []
+    if config.max_parallel_tools >= 2 and toolbox is not None:
+        is_parallel_safe = getattr(toolbox, "is_parallel_safe", None)
+        if callable(is_parallel_safe) and not any(
+            is_parallel_safe(name) for name in toolbox.names()
+        ):
+            hints.append(
+                f"Parallel execution is enabled (max_parallel_tools="
+                f"{config.max_parallel_tools}) but no tool declares "
+                "parallel_safe=True; every action will stay single-call"
+            )
+    return hints
+
+
+def react_pattern(config: ModelConfig, decider: Callable, *, toolbox: Any = None,
+                  **overrides: Any) -> ReActPattern:
+    """Single wiring point from ModelConfig to ReActPattern.
+
+    Applies config.react_options() (minus anything a caller overrides) and
+    verifies model-side and executor-side limits agree before the assembly
+    can run. Custom deciders remain valid: any Decide callable works, and
+    the chassis core never imports from this adapter module.
+    """
+    pattern = ReActPattern(decider, **{**config.react_options(), **overrides})
+    for hint in validate_react_alignment(config, pattern, toolbox):
+        warnings.warn(hint, stacklevel=2)
+    return pattern
 
 
 class RuntimeDecider:

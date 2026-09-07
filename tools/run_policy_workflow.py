@@ -16,10 +16,10 @@ sys.path.insert(0, str(ROOT))
 from agent_chassis import Chassis, InjectionPoint as P, borrowed_executor
 from agent_chassis.evidence import EvidenceObserver, assembly_manifest, content_id
 from agent_chassis.knowledge import ScopedKnowledge
-from agent_chassis.orchestration import AgentStep, FnStep, ReActPattern, StateMachineOrchestrator
+from agent_chassis.orchestration import AgentStep, FnStep, StateMachineOrchestrator
 from adapters.anthropic_runtime import AnthropicDecider
 from adapters.openai_runtime import OpenAIChatDecider
-from adapters.runtime import RuntimeDecider
+from adapters.runtime import RuntimeDecider, react_pattern
 from payloads.config_policy import ConfigCriteria, ConfigSource, expected_config
 from payloads.patch_showcase import Candidate, patch_tools, submission_ready
 from tools.run_roadmap_showcase import add_model_arguments, model_config, source_revision, write_json
@@ -71,8 +71,8 @@ def assemble(case, snapshot, *, mode, context_policy, config, protocol="anthropi
         if criteria.validate(t).done:
             ctx.facts["verified_candidate"] = candidate.digests()["candidate_sha256"]
 
-    pattern = ReActPattern(decider, **config.react_options(),
-                          stop_when=lambda t, ctx: submission_ready(candidate, ctx))
+    pattern = react_pattern(config, decider, toolbox=toolbox,
+                            stop_when=lambda t, ctx: submission_ready(candidate, ctx))
     flow = StateMachineOrchestrator([FnStep("prepare", prepare), FnStep("select_context", select_context),
                                     AgentStep("repair_config", pattern=pattern, toolbox=toolbox),
                                     FnStep("verify_config", verify)])

@@ -2,6 +2,8 @@
 
 开发分支：`feat/roadmap-showcase-v1`。这里按阶段记录**已实现的功能、用途、验证结果与限制**；完整规划仍在 [Roadmap](../roadmap/README.md)。
 
+最新维护：[ReAct 装配配置一致性检查](react-assembly-alignment-2026-09-07.md)。新增统一装配入口 `react_pattern` 与 `validate_react_alignment` 装配期预检，模型侧与执行器上限不一致在发起任何模型请求前报错；另修复 Windows 下 patch 文件换行转换破坏摘要校验的问题。
+
 最新能力：[ReAct 独立工具并行](react-parallel-tools-2026-09-07.md)。按用户确认的方向扩展批量动作、有限并发、失败等待与证据，OpenAI / Anthropic 共用配置；默认兼容单调用。见[使用说明](../docs/PARALLEL_TOOLS.md)。
 
 前序修复：[OpenAI 单调用契约](openai-single-call-2026-09-07.md)。当时仅补齐单调用防护；本次在保留默认行为的基础上提供显式并行能力。

@@ -36,12 +36,11 @@ toolbox = ToolBox().add(
 
 这是追加到原运行命令的参数片段。CLI 会同时配置模型协议和 ReAct：OpenAI 发送 `parallel_tool_calls: true`，Anthropic 发送 `disable_parallel_tool_use: false`。模型不保证每轮都会选择多个工具。只有提交类工具的装配仍只能单调用，不会因开启开关自动产生可并行工作。
 
-直接在 Python 中装配 OpenAI：
+直接在 Python 中装配 OpenAI，推荐用统一入口 `react_pattern`（自动应用 `config.react_options()` 并在装配期检查两侧上限一致）：
 
 ```python
-from adapters.runtime import ModelConfig
+from adapters.runtime import ModelConfig, react_pattern
 from adapters.openai_runtime import OpenAIChatDecider
-from agent_chassis.orchestration import ReActPattern
 
 config = ModelConfig(
     model="YOUR_MODEL", base_url="https://YOUR_GATEWAY/v1",
@@ -50,12 +49,14 @@ config = ModelConfig(
     openai_parallel_tool_calls=True,
 )
 decider = OpenAIChatDecider(config, tool_names=toolbox.names())
-pattern = ReActPattern(decider, **config.react_options())
+pattern = react_pattern(config, decider, toolbox=toolbox, stop_when=...)
 ```
+
+`react_pattern` 在构造时调用 `validate_react_alignment`：模型侧与执行器的 `max_parallel_tools` / `max_batch_calls` / `max_tool_calls` 不一致会立即报错，指出字段、两侧值和修正方式，而不是等到模型真的返回多个调用才在运行中失败；开启并行但没有任何工具声明 `parallel_safe=True` 时给出提示（不阻止运行）。手工装配仍可写 `ReActPattern(decider, **config.react_options())`，此时应自行调用 `adapters.runtime.validate_react_alignment(config, pattern, toolbox)` 做同样检查。自定义 decider（非模型适配器）继续可用，核心包不依赖适配器。
 
 以上示例接入装配方提供的 `toolbox`、`boundary` 和不可变快照。参考适配器依赖仓库检出及 `.[llm]` 可选依赖；底盘核心仍零第三方依赖。Anthropic 使用 `AnthropicDecider`，省略 OpenAI 专用字段即可，并发能力由 `max_parallel_tools` 决定。
 
-对于明确拒绝该 OpenAI 参数的网关，可追加 `--openai-omit-parallel-tool-calls`，或将 `openai_parallel_tool_calls=None`。省略参数不会放宽本地限制，也不触发自动重试。旧配置 `False` 继续请求单调用；手工装配应同时设置协议字段与执行器参数，使用 `config.react_options()` 避免两侧上限不一致。
+对于明确拒绝该 OpenAI 参数的网关，可追加 `--openai-omit-parallel-tool-calls`，或将 `openai_parallel_tool_calls=None`。省略参数不会放宽本地限制，也不触发自动重试。旧配置 `False` 继续请求单调用；无论哪种写法，`react_pattern` / `validate_react_alignment` 都会在装配期核对协议配置与执行器上限是否一致。
 
 协议字段参考：[OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling)、[Anthropic parallel tool use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use)。第三方网关的实际支持仍需实测。
 

@@ -6,6 +6,7 @@
 
 | 能力 | 当前实现与限制 | 证据 |
 |---|---|---|
+| ReAct 装配一致性检查 | `react_pattern` 统一入口 + 装配期核对模型侧与执行器三项上限；冲突在模型请求前报错，无并行声明工具时提示；检查位于适配层，核心包不依赖适配器 | [本次实现与验证](../changelog/react-assembly-alignment-2026-09-07.md)；本地回归通过，编译器相关用例待 CI |
 | ReAct 独立工具并行 | OpenAI / Anthropic 批量动作、有限线程并发、整批预检、失败等待、调用 ID；默认单调用，需声明工具可并行 | [本次实现与验证](../changelog/react-parallel-tools-2026-09-07.md)、[使用说明](../docs/PARALLEL_TOOLS.md)；未进行企业 live 性能测量 |
 | 需求生成可运行员工 | 模型生成 Python 节点接线、清单和说明；首版仅 C++ include 修复，复用共享工具与验收器 | [第四阶段真实链路](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34020348896)：一次生成，同一项目处理两个源码输入，独立验收通过 |
 | 规范更新并保留定制 | 只更新既有知识文件内容；预览影响、检测冲突、保留工作副本中的代码和自定义文件，创建新版本 | [第五阶段真实链路](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34033606604)：更新 0 次模型调用，新旧规范改变同一输入的选择，两个旧任务通过 |

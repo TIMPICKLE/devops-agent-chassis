@@ -23,10 +23,10 @@ from agent_chassis import Chassis, InjectionPoint as P, Outcome, borrowed_execut
 from agent_chassis.evidence import EvidenceObserver, assembly_manifest
 from agent_chassis.failure import ZeroSideEffectPolicy
 from agent_chassis.knowledge import SkillLibrary, SkillProvider, StaticKnowledge, by_extension
-from agent_chassis.orchestration import AgentStep, FnStep, NestedOrchestrator, ReActPattern, SingleAgentOrchestrator, StateMachineOrchestrator
+from agent_chassis.orchestration import AgentStep, FnStep, NestedOrchestrator, SingleAgentOrchestrator, StateMachineOrchestrator
 from adapters.anthropic_runtime import AnthropicDecider, ModelConfig
 from adapters.openai_runtime import OpenAIChatDecider
-from adapters.runtime import DEFAULT_ENDPOINTS, RuntimeDecider
+from adapters.runtime import DEFAULT_ENDPOINTS, RuntimeDecider, react_pattern
 from payloads.patch_showcase import Candidate, HeaderBuildCriteria, HeaderBuildSource, PythonNoneCriteria, PythonQualitySource, fixture_solution, patch_tools, submission_ready
 
 
@@ -67,8 +67,8 @@ def assemble(scenario, *, mode="live", flow="nested", config=None, code_ref="unk
         decider = offline_decide if mode == "offline" else adapter(config, tool_names=toolbox.names())
     execution_mode = ("offline-contract" if decider is offline_decide else
                       decider.execution_mode if isinstance(decider, RuntimeDecider) else "test-decider")
-    pattern = ReActPattern(decider, **config.react_options(),
-                          stop_when=(lambda t, c: submission_ready(candidate, c)) if stop_policy == "objective" else None)
+    pattern = react_pattern(config, decider, toolbox=toolbox,
+                            stop_when=(lambda t, c: submission_ready(candidate, c)) if stop_policy == "objective" else None)
     if flow == "single_agent":
         orchestrator = SingleAgentOrchestrator(toolbox, pattern)
     elif flow == "state_machine":
@@ -122,7 +122,8 @@ def execute_scenario(scenario, output, *, prefix=None, **assembly):
         result = chassis.run_once()
         evidence.dump(str(output / (prefix + ".evidence.json")))
         if result.outcome is Outcome.SUCCEEDED:
-            (output / (prefix + ".patch")).write_text(candidate.patch(), encoding="utf-8")
+            # Keep LF byte-for-byte: the verifier digests the exact patch text.
+            (output / (prefix + ".patch")).write_text(candidate.patch(), encoding="utf-8", newline="\n")
         run = evidence.runs[0]
         case = {"scenario": scenario, "outcome": result.outcome.value,
                 "reason": result.verdict.reason if result.verdict else result.error,
