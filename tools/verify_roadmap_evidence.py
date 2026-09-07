@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from agent_chassis.evidence import content_id
+from agent_chassis.production import validate_execution_evidence, validate_production_manifest, validate_production_run
 
 
 def _check_id(document):
@@ -23,7 +24,7 @@ def _check_id(document):
         raise ValueError("Content ID does not match document")
 
 
-def verify_documents(manifest, evidence, *, require_live=False):
+def verify_documents(manifest, evidence, *, require_live=False, require_production=False):
     from jsonschema import Draft202012Validator
 
     for name, document in [("assembly", manifest), ("evidence", evidence)]:
@@ -34,10 +35,15 @@ def verify_documents(manifest, evidence, *, require_live=False):
             # ValidationError messages can embed the entire bad input; omit them.
             raise ValueError(f"{name} does not match v1 schema")
     _check_id(manifest)
+    if require_production:
+        validate_production_manifest(manifest)
     if not evidence["runs"]:
         raise ValueError("No runs to verify")
     for run in evidence["runs"]:
         _check_id(run)
+        validate_execution_evidence(run)
+        if require_production:
+            validate_production_run(manifest, run)
         if run["assembly_id"] != manifest["content_id"]:
             raise ValueError("Run refers to a different assembly")
         if "mode" in manifest["runtime"] and run["mode"] != manifest["runtime"]["mode"]:
@@ -67,6 +73,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
     parser.add_argument("--require-live", action="store_true")
+    parser.add_argument("--require-production", action="store_true",
+                        help="Require source, assembly, effective limits and objective check receipts")
     args = parser.parse_args(argv)
     paths = sorted(args.directory.glob("*.manifest.json"))
     if not paths:
@@ -75,7 +83,8 @@ def main(argv=None):
     for path in paths:
         evidence_path = path.with_name(path.name.replace(".manifest.json", ".evidence.json"))
         evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-        count += verify_documents(json.loads(path.read_text(encoding="utf-8")), evidence, require_live=args.require_live)
+        count += verify_documents(json.loads(path.read_text(encoding="utf-8")), evidence,
+                                  require_live=args.require_live, require_production=args.require_production)
         for run in evidence["runs"]:
             if run["outcome"] == "succeeded":
                 patch = path.with_name(path.name.replace(".manifest.json", ".patch"))

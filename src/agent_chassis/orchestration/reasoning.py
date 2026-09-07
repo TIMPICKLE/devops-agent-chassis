@@ -27,6 +27,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from copy import deepcopy
+from threading import Lock
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -38,6 +39,7 @@ from ..contracts import (
     Task,
     ToolCall,
 )
+from ..diagnostics import ToolDiagnostic
 
 reasoning_registry = Registry("reasoning-pattern")
 
@@ -61,19 +63,30 @@ class ToolRequest:
 
 
 def validate_batch(toolbox: Any, requests: Any, limit: int) -> None:
-    if not isinstance(requests, (list, tuple)) or not 2 <= len(requests) <= limit:
-        raise ValueError("Batch size must be between 2 and max_batch_calls")
+    if not isinstance(requests, (list, tuple)) or len(requests) < 2:
+        raise ToolDiagnostic("INVALID_BATCH")
+    if len(requests) > limit:
+        raise ToolDiagnostic("BATCH_LIMIT_EXCEEDED")
     seen = set()
-    for request in requests:
-        if (not isinstance(request, ToolRequest) or not isinstance(request.call_id, str)
-                or not request.call_id or len(request.call_id) > 200 or request.call_id in seen
-                or not isinstance(request.name, str) or not isinstance(request.args, dict)):
-            raise ValueError("Invalid batch action or duplicate call ID")
+    for index, request in enumerate(requests, 1):
+        if not isinstance(request, ToolRequest):
+            raise ToolDiagnostic("INVALID_BATCH", action_index=index)
+        if not isinstance(request.call_id, str) or not request.call_id or len(request.call_id) > 200:
+            raise ToolDiagnostic("INVALID_CALL_ID", action_index=index)
+        if request.call_id in seen:
+            raise ToolDiagnostic("DUPLICATE_CALL_ID", action_index=index)
+        if not isinstance(request.name, str):
+            raise ToolDiagnostic("UNKNOWN_TOOL", action_index=index)
+        if not isinstance(request.args, dict):
+            raise ToolDiagnostic("INVALID_TOOL_ARGUMENTS", action_index=index)
         seen.add(request.call_id)
         validator = getattr(toolbox, "validate_parallel_call", None)
         if not callable(validator):
             raise ValueError("ToolBox must explicitly support parallel-safe validation")
-        validator(request.name, request.args)
+        try:
+            validator(request.name, request.args)
+        except ToolDiagnostic as error:
+            raise ToolDiagnostic(error.code, **{**error.details, "action_index": index}) from None
 
 
 class BatchToolError(RuntimeError):
@@ -174,7 +187,7 @@ def _substitute(args: Dict[str, Any], evidence: Dict[str, Any]) -> Dict[str, Any
     return out
 
 
-def _invoke_batch(toolbox, requests, task, ctx, executor_tools, max_workers):
+def _invoke_batch(toolbox, requests, task, ctx, executor_tools, max_workers, execution_id):
     # No worker receives task/ctx. Injections, facts and observers stay on the
     # coordinator thread. A copy also prevents aliased arguments racing.
     requests = [deepcopy(request) for request in requests]
@@ -186,20 +199,31 @@ def _invoke_batch(toolbox, requests, task, ctx, executor_tools, max_workers):
             ctx.chassis.inject(point, task, ctx)
 
     completed = [None] * len(requests)
+    lock = Lock()
+    active = peak = started_count = 0
 
     def execute(index, request):
+        nonlocal active, peak, started_count
+        with lock:
+            active += 1
+            started_count += 1
+            peak = max(peak, active)
         started = time.monotonic()
-        capture = (ctx.chassis.capture_connector_calls() if ctx.chassis is not None
-                   else nullcontext([]))
-        with capture as nested:
-            try:
+        nested = []
+        try:
+            capture = (ctx.chassis.capture_connector_calls() if ctx.chassis is not None
+                       else nullcontext([]))
+            with capture as nested:
                 result = toolbox.call(request.name, **deepcopy(request.args))
-                rec = ToolCall(request.name, request.args, result=result)
-                error = None
-            except BaseException as exc:
-                rec = ToolCall(request.name, request.args, ok=False,
-                               error=f"{type(exc).__name__}: {exc}")
-                error = exc
+            rec = ToolCall(request.name, request.args, result=result)
+            error = None
+        except BaseException as exc:
+            rec = ToolCall(request.name, request.args, ok=False,
+                           error=f"{type(exc).__name__}: {exc}")
+            error = exc
+        finally:
+            with lock:
+                active -= 1
         rec.elapsed_ms = int((time.monotonic() - started) * 1000)
         rec.call_id, rec.batch_id = request.call_id, batch_id
         completed[index] = (rec, nested, error)
@@ -220,6 +244,10 @@ def _invoke_batch(toolbox, requests, task, ctx, executor_tools, max_workers):
     # submit() may enqueue work before failing to create another thread. Keep
     # records for such work even if its Future was never returned to the caller.
     outcomes = [outcome for outcome in completed if outcome is not None]
+    ctx.tool_batches.append({"batch_id": batch_id, "execution_id": execution_id,
+                             "call_ids": [r.call_id for r in requests], "requested": len(requests),
+                             "started": started_count, "succeeded": sum(rec.ok for rec, _, _ in outcomes),
+                             "failed": sum(not rec.ok for rec, _, _ in outcomes), "peak_in_flight": peak})
     records = []
     used_ids = {request.call_id for request in requests}
     for rec, nested, _ in outcomes:
@@ -275,7 +303,10 @@ class ReActPattern(ReasoningPattern):
         max_parallel_tools: int = 1,
         max_batch_calls: int = 8,
         max_tool_calls: int = 64,
+        execution_key: str = "react",
     ) -> None:
+        if not isinstance(execution_key, str) or not execution_key:
+            raise ValueError("execution_key must be a non-empty string")
         for value in (max_parallel_tools, max_batch_calls, max_tool_calls):
             if type(value) is not int or value < 1:
                 raise ValueError("Tool execution limits must be positive integers")
@@ -287,6 +318,11 @@ class ReActPattern(ReasoningPattern):
         self.max_parallel_tools = max_parallel_tools
         self.max_batch_calls = max_batch_calls
         self.max_tool_calls = max_tool_calls
+        self.execution_key = execution_key
+
+    def execution_limits(self):
+        return {"max_iterations": self.max_iterations, "max_parallel_tools": self.max_parallel_tools,
+                "max_batch_calls": self.max_batch_calls, "max_tool_calls": self.max_tool_calls}
 
     def describe(self) -> str:
         description = super().describe()
@@ -294,6 +330,18 @@ class ReActPattern(ReasoningPattern):
                 + f"；工具并发上限 {self.max_parallel_tools}，每批上限 {self.max_batch_calls}，任务调用上限 {self.max_tool_calls}")
 
     def reason(self, task: Task, ctx: RunContext, toolbox: Any) -> None:
+        try:
+            self._reason(task, ctx, toolbox)
+        except ToolDiagnostic as error:
+            ctx.diagnostics.append(error.as_dict())
+            raise
+
+    def _reason(self, task: Task, ctx: RunContext, toolbox: Any) -> None:
+        execution_id = f"react-{len(ctx.executions) + 1}"
+        safe = getattr(toolbox, "is_parallel_safe", lambda _: False)
+        ctx.executions.append({"execution_id": execution_id, "key": self.execution_key,
+                               "attempt": max(1, ctx.attempt), "limits": self.execution_limits(),
+                               "parallel_safe_tools": [name for name in getattr(toolbox, "names", lambda: [])() if safe(name)]})
         for _ in range(self.max_iterations):
             ctx.iterations += 1
             action, target, kwargs = self.decide(task, ctx, toolbox)
@@ -305,17 +353,17 @@ class ReActPattern(ReasoningPattern):
                 raise ValueError(f"未知 ReAct 动作：{action!r}")
             if action == "batch":
                 if self.max_parallel_tools < 2:
-                    raise ValueError("Parallel tool execution is disabled")
+                    raise ToolDiagnostic("PARALLEL_DISABLED")
                 if kwargs is not None:
-                    raise ValueError("Batch action must use None as its third element")
+                    raise ToolDiagnostic("INVALID_BATCH")
                 validate_batch(toolbox, target, self.max_batch_calls)
             count = len(target) if action == "batch" else 1
             if ctx.tool_actions_started + count > self.max_tool_calls:
                 ctx.facts["stop_reason"] = "tool_call_limit"
-                raise ValueError("Task-wide tool call budget exhausted")
+                raise ToolDiagnostic("TOOL_BUDGET_EXHAUSTED")
             ctx.tool_actions_started += count
             if action == "batch":
-                _invoke_batch(toolbox, target, task, ctx, self.executor_tools, self.max_parallel_tools)
+                _invoke_batch(toolbox, target, task, ctx, self.executor_tools, self.max_parallel_tools, execution_id)
             else:
                 invoke_tool(toolbox, target, kwargs or {}, task, ctx, self.executor_tools)
             if self.stop_when is not None:

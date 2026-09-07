@@ -123,7 +123,8 @@ def execute_scenario(scenario, output, *, prefix=None, **assembly):
         evidence.dump(str(output / (prefix + ".evidence.json")))
         if result.outcome is Outcome.SUCCEEDED:
             # Keep LF byte-for-byte: the verifier digests the exact patch text.
-            (output / (prefix + ".patch")).write_text(candidate.patch(), encoding="utf-8", newline="\n")
+            with (output / (prefix + ".patch")).open("w", encoding="utf-8", newline="\n") as patch_file:
+                patch_file.write(candidate.patch())
         run = evidence.runs[0]
         case = {"scenario": scenario, "outcome": result.outcome.value,
                 "reason": result.verdict.reason if result.verdict else result.error,

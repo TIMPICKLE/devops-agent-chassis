@@ -59,6 +59,7 @@ from .reasoning import (
     invoke_tool,
     reasoning_registry,
 )
+from ..diagnostics import ToolDiagnostic
 
 orchestrator_registry = Registry("orchestrator")
 
@@ -165,11 +166,16 @@ class ToolBox:
         return name in self._parallel_safe and name not in self._contextual
 
     def validate_parallel_call(self, name: str, args: Dict[str, Any]) -> None:
+        if name not in self._tools:
+            raise ToolDiagnostic("UNKNOWN_TOOL")
         if not self.is_parallel_safe(name):
-            raise ValueError("Batch contains an unknown or non-parallel-safe tool")
+            raise ToolDiagnostic("TOOL_NOT_PARALLEL_SAFE", tool=name)
         # Validate the whole batch before any worker starts. Permission checks
         # remain in tool wrappers; parallel_safe never grants capabilities.
-        inspect.signature(self._tools[name]).bind(**args)
+        try:
+            inspect.signature(self._tools[name]).bind(**args)
+        except (ValueError, TypeError):
+            raise ToolDiagnostic("INVALID_TOOL_ARGUMENTS", tool=name, constraint="signature") from None
 
     def schema(self) -> List[Dict[str, Any]]:
         return [dict(

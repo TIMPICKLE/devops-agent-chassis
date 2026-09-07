@@ -96,10 +96,28 @@ action = ("batch", [
 
 可移植证据新增可选 `call_id` / `batch_id`，保持原有不导出工具参数/结果的默认做法；新 schema 接受旧报告，使用旧版严格 schema 的读取端需一并更新。RecordingObserver 也记录这两个字段。记录按请求顺序展示，不应把记录顺序当作实际完成先后。
 
+工具预检失败通过 `ToolDiagnostic` 提供稳定错误码；参考模型适配器仍抛出 `ModelError`，通过其 `diagnostic` 属性及公开报告中的同名字段保留分类：
+
+| 错误码 | 应检查什么 |
+|---|---|
+| `PARALLEL_DISABLED` | 是否经统一入口开启并行 |
+| `TOOL_NOT_PARALLEL_SAFE` | 是否误把 contextual / 未声明安全的工具加入批次 |
+| `UNKNOWN_TOOL` | 模型动作是否使用注册白名单之外的工具 |
+| `DUPLICATE_CALL_ID` / `INVALID_CALL_ID` | 批内调用 ID 是否唯一且有效 |
+| `INVALID_TOOL_ARGUMENTS` | 注册 schema 的字段类型/约束或函数签名 |
+| `INVALID_BATCH` | 批次结构与动作格式 |
+| `BATCH_LIMIT_EXCEEDED` / `TOOL_BUDGET_EXHAUSTED` | 每批上限或当前任务剩余动作预算 |
+
+有具体动作时附 1 起始的 `action_index`；只公开可信工具名、schema 声明路径和约束类型，不回显参数值、未知名称或原始 schema 错误。预检失败仍整批零执行；已发出的模型请求仍保留 token 记账。
+
+ReAct 还记录最终执行限制、每批实际启动/结果计数和 `peak_in_flight`。配置大于 1 不等于实测发生并发，Connector 内部也可能仍串行。
+源码/装配关联与独立验收回执的显式检查见[生产格式证据](PRODUCTION_EVIDENCE.md)。
+
 ## 5. 验证与演示
 
 ```bash
 python examples/06_parallel_tools.py
+python examples/07_verified_assembly.py  # 需安装 .[llm]；含独立验收及证据检查，无网络请求
 python -m pytest tests/test_parallel_react.py tests/test_parallel_runtime.py -q
 ```
 

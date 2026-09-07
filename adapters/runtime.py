@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from agent_chassis.contracts import InjectionPoint, RunContext, Task
+from agent_chassis.diagnostics import ToolDiagnostic
 from agent_chassis.orchestration.reasoning import ReActPattern, ToolRequest, validate_batch
 
 
@@ -41,6 +42,27 @@ DEFAULT_ENDPOINTS = {
 
 class ModelError(RuntimeError):
     """Sanitized model transport/protocol failure."""
+
+    def __init__(self, message, *, diagnostic=None):
+        super().__init__(message)
+        self.diagnostic = diagnostic
+
+
+def _schema_location(error, schema):
+    """Only schema-declared keys/array indices; unknown object keys may be secrets."""
+    path = "$"
+    for part in error.absolute_path:
+        if not isinstance(schema, dict):
+            break
+        if type(part) is int and schema.get("type") == "array":
+            path += f"[{part}]"
+            schema = schema.get("items", {})
+        elif isinstance(part, str) and part in schema.get("properties", {}):
+            path += "." + part
+            schema = schema["properties"][part]
+        else:
+            break
+    return path
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -213,9 +235,10 @@ class RuntimeDecider:
         if len(calls) == 1:
             return "call", calls[0].name, calls[0].args
         if self.config.max_parallel_tools < 2:
-            raise ModelError(f"Expected at most one function call, received {len(calls)}; no tools executed")
+            raise ModelError(f"Expected at most one function call, received {len(calls)}; no tools executed",
+                             diagnostic=ToolDiagnostic("PARALLEL_DISABLED"))
         if len(calls) > self.config.max_batch_calls:
-            raise ModelError("Model response exceeds max_batch_calls; no tools executed")
+            raise ToolDiagnostic("BATCH_LIMIT_EXCEEDED")
         return "batch", calls, None
 
     def __call__(self, task: Task, ctx: RunContext, toolbox: Any) -> tuple:
@@ -285,23 +308,32 @@ class RuntimeDecider:
             result = self.parse_response(response)
             actions = ([ToolRequest("", result[1], result[2])] if result[0] == "call"
                        else result[1] if result[0] == "batch" else [])
-            for action in actions:
+            for index, action in enumerate(actions, 1):
                 name, args = action.name, action.args
-                if not isinstance(name, str) or name not in validators or not isinstance(args, dict):
-                    raise ModelError("Unknown tool or invalid tool arguments")
-                if list(validators[name].iter_errors(args)):
-                    raise ModelError("Tool arguments do not match inputSchema")
+                if not isinstance(name, str) or name not in validators:
+                    raise ToolDiagnostic("UNKNOWN_TOOL", action_index=index)
+                if not isinstance(args, dict):
+                    raise ToolDiagnostic("INVALID_TOOL_ARGUMENTS", action_index=index, tool=name,
+                                         argument_path="$", constraint="type")
+                error = next(validators[name].iter_errors(args), None)
+                if error is not None:
+                    raise ToolDiagnostic("INVALID_TOOL_ARGUMENTS", action_index=index, tool=name,
+                                         argument_path=_schema_location(error, validators[name].schema),
+                                         constraint=str(error.validator))
             if result[0] == "batch":
-                try:
-                    validate_batch(toolbox, actions, config.max_batch_calls)
-                except (ValueError, TypeError):
-                    raise ModelError("Invalid batch IDs, unsafe tool or incompatible arguments; no tools executed") from None
+                validate_batch(toolbox, actions, config.max_batch_calls)
             record["ok"] = True
             return result
         except Exception as exc:
-            record["error_type"] = type(exc).__name__
+            diagnostic = exc if isinstance(exc, ToolDiagnostic) else getattr(exc, "diagnostic", None)
+            if isinstance(diagnostic, ToolDiagnostic):
+                record["diagnostic"] = diagnostic.as_dict()
+                ctx.diagnostics.append(diagnostic.as_dict())
+            record["error_type"] = "ModelError" if isinstance(exc, ToolDiagnostic) else type(exc).__name__
             if isinstance(exc, ModelError):
                 raise
+            if isinstance(exc, ToolDiagnostic):
+                raise ModelError(str(exc), diagnostic=exc) from None
             raise ModelError(f"Model adapter failed ({type(exc).__name__})") from None
         finally:
             record["elapsed_ms"] = int((time.monotonic() - started) * 1000)

@@ -243,6 +243,7 @@ class Chassis:
 
                 while True:
                     try:
+                        ctx.attempt += 1
                         self._active_verdict.set(None)
                         ctx.facts["attempt_tool_call_start"] = len(ctx.tool_calls)
                         ctx.facts.pop("stop_reason", None)

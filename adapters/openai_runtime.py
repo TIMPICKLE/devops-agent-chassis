@@ -8,6 +8,7 @@ does not relax response validation or cause automatic retries.
 import json
 
 from adapters.runtime import ModelError, RuntimeDecider, ToolRequest
+from agent_chassis.diagnostics import ToolDiagnostic
 
 
 class OpenAIChatDecider(RuntimeDecider):
@@ -53,20 +54,21 @@ class OpenAIChatDecider(RuntimeDecider):
             if len(calls) > 1 and self.config.max_parallel_tools < 2:
                 # Reject the entire batch before selecting/parsing any action.
                 # Names and arguments may contain sensitive data; report count only.
-                raise ModelError(f"Expected at most one function call, received {len(calls)}; no tools executed")
+                raise ModelError(f"Expected at most one function call, received {len(calls)}; no tools executed",
+                                 diagnostic=ToolDiagnostic("PARALLEL_DISABLED"))
             if len(calls) > self.config.max_batch_calls:
-                raise ModelError("Model response exceeds max_batch_calls; no tools executed")
+                raise ToolDiagnostic("BATCH_LIMIT_EXCEEDED")
             parsed = []
-            for call in calls:
+            for index, call in enumerate(calls, 1):
                 if not isinstance(call, dict) or call.get("type") != "function":
                     raise ModelError("Expected function call")
                 function = call.get("function")
                 if not isinstance(function, dict) or not isinstance(function.get("arguments"), str):
-                    raise ModelError("Invalid function arguments encoding")
+                    raise ToolDiagnostic("INVALID_TOOL_ARGUMENTS", action_index=index, constraint="encoding")
                 try:
                     args = json.loads(function["arguments"])
                 except ValueError:
-                    raise ModelError("Function arguments are not JSON") from None
+                    raise ToolDiagnostic("INVALID_TOOL_ARGUMENTS", action_index=index, constraint="json") from None
                 parsed.append(ToolRequest(call.get("id", ""), function.get("name"), args))
             return self.normalize_calls(parsed)
         if finish == "stop":

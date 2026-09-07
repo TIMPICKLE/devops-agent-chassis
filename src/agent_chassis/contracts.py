@@ -401,6 +401,25 @@ class RunContext:
     model_calls: List[Dict[str, Any]] = field(default_factory=list)
     # Task-wide ReAct action budget, including failed calls and earlier attempts.
     tool_actions_started: int = 0
+    diagnostics: List[Dict[str, Any]] = field(default_factory=list)
+    attempt: int = 0
+    executions: List[Dict[str, Any]] = field(default_factory=list)
+    tool_batches: List[Dict[str, Any]] = field(default_factory=list)
+    verification_checks: List[Dict[str, Any]] = field(default_factory=list)
+
+    def record_check(self, name: str, status: str, *, evidence_refs: Optional[Dict[str, str]] = None) -> None:
+        """Record an objective check, not a verdict. References must not contain secrets.
+
+        Latest receipt per name in the current attempt is authoritative for report
+        consistency checks; earlier failed/retried checks remain in the trace.
+        """
+        if not isinstance(name, str) or not name or status not in {"passed", "failed", "not_run"}:
+            raise ValueError("A named check with passed/failed/not_run status is required")
+        refs = dict(evidence_refs or {})
+        if any(not isinstance(k, str) or not isinstance(v, str) or not k or not v for k, v in refs.items()):
+            raise ValueError("Check evidence references must be non-empty strings")
+        self.verification_checks.append({"name": name, "status": status, "attempt": max(1, self.attempt),
+                                         "evidence_refs": refs})
 
     def context_for(
         self,

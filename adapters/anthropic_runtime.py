@@ -3,6 +3,7 @@
 ModelConfig, ModelError and post_json remain importable here for compatibility.
 """
 from adapters.runtime import ModelConfig, ModelError, RuntimeDecider, ToolRequest, post_json
+from agent_chassis.diagnostics import ToolDiagnostic
 
 
 class AnthropicDecider(RuntimeDecider):
@@ -29,7 +30,8 @@ class AnthropicDecider(RuntimeDecider):
             if response.get("stop_reason") != "tool_use":
                 raise ModelError("Tool call is inconsistent with stop_reason")
             if len(calls) > 1 and self.config.max_parallel_tools < 2:
-                raise ModelError("Expected one tool call, received multiple")
+                raise ModelError("Expected one tool call, received multiple",
+                                 diagnostic=ToolDiagnostic("PARALLEL_DISABLED"))
             return self.normalize_calls([ToolRequest(call.get("id", ""), call.get("name"), call.get("input"))
                                          for call in calls])
         if response.get("stop_reason") == "end_turn":

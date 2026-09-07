@@ -38,6 +38,27 @@ class EvidenceObserver(Observer):
                  assembly_id: str = ""):
         self.code_ref, self.mode, self.assembly_id = code_ref, mode, assembly_id
         self.runs: list = []
+        self.source = None
+
+    def bind_manifest(self, manifest, *, production=False):
+        """Bind before running. Production validation is opt-in; old demos stay valid."""
+        if manifest.get("content_id") != content_id({k: v for k, v in manifest.items() if k != "content_id"}):
+            raise ValueError("Assembly content ID mismatch")
+        if production:
+            from .production import validate_production_manifest
+            validate_production_manifest(manifest)
+        runtime = manifest.get("runtime", {})
+        source = runtime.get("source")
+        mode = runtime.get("mode", self.mode)
+        if self.mode != "unverified" and self.mode != mode:
+            raise ValueError("Observer and assembly modes disagree")
+        if source is not None and self.code_ref not in {"unknown", source["commit"]}:
+            raise ValueError("Observer and assembly source revisions disagree")
+        self.assembly_id, self.mode = manifest["content_id"], mode
+        self.source = deepcopy(source)
+        if source is not None:
+            self.code_ref = source["commit"]
+        return self
 
     def on_task_end(self, result: TaskResult, ctx: RunContext) -> None:
         model_calls = deepcopy(ctx.model_calls)
@@ -64,6 +85,13 @@ class EvidenceObserver(Observer):
                             **({"call_id": call.call_id, "batch_id": call.batch_id} if call.call_id else {})}
                            for call in ctx.tool_calls],
             "model_calls": model_calls,
+            "attempt": max(1, ctx.attempt),
+            **({"source": deepcopy(self.source)} if self.source is not None else {}),
+            **({"execution": {"runs": deepcopy(ctx.executions), "batches": deepcopy(ctx.tool_batches),
+                              "parallel_observed": any(b["peak_in_flight"] > 1 for b in ctx.tool_batches)}}
+               if ctx.executions else {}),
+            **({"checks": deepcopy(ctx.verification_checks)} if ctx.verification_checks else {}),
+            **({"diagnostics": deepcopy(ctx.diagnostics)} if ctx.diagnostics else {}),
             "usage": {
                 "complete": usage_complete,
                 "input_tokens": sum(c["input_tokens"] for c in model_calls) if usage_complete else None,

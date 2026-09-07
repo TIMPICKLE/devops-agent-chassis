@@ -63,6 +63,7 @@ def test_calls_overlap_but_traces_keep_request_order_and_stop_waits_for_all():
     assert len({c.batch_id for c in ctx.tool_calls}) == 1
     assert ctx.facts["stop_reason"] == "objective_stop"
     assert ctx.tool_actions_started == 2 and ctx.iterations == 1
+    assert ctx.tool_batches[0]["peak_in_flight"] == 2
 
 
 def test_worker_count_is_bounded_for_a_larger_batch():
@@ -253,6 +254,9 @@ def test_partial_thread_submission_failure_still_drains_and_records_started_work
         pattern_for(requests()).reason(Task("t", "test"), ctx, box)
     assert finished.is_set() and len(ctx.tool_calls) == (2 if queued else 1)
     assert all(call.ok for call in ctx.tool_calls)
+    stats = ctx.tool_batches[0]
+    assert stats["requested"] == 2 and stats["started"] == len(ctx.tool_calls)
+    assert stats["succeeded"] == len(ctx.tool_calls) and stats["failed"] == 0
 
 
 def test_task_retry_cannot_reset_tool_action_budget():
