@@ -37,3 +37,13 @@
 - 支持 Chat Completions 与 Messages 原生客户端工具调用，未实现 Responses API 或自动协议/模型能力探测。
 
 协议参考与各项限制集中在[流式说明](../docs/STREAMING.md)，使用官方 OpenAI 和 Anthropic 事件说明核对。
+
+## 远端验证
+
+受测实现提交：[9e26ecb92c61d2499b88abd1ccee10e13ff954e4](https://github.com/TIMPICKLE/devops-agent-chassis/commit/9e26ecb92c61d2499b88abd1ccee10e13ff954e4)。三条 CI 均通过：
+
+- [Roadmap 合同与可移植证据](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34198215165)，包含 Python 3.9 / 3.13。
+- [Employee Project](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34198215162)。
+- [Employee Update](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34198215150)。
+
+后续提交仅补录结果；没有触发付费模型任务或企业网关验证。
