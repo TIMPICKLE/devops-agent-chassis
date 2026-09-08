@@ -42,6 +42,23 @@ python tools/run_generated_employee.py --project reports/employee-demo/project -
 
 模型用 `read_file` 读取实际项目文件，也可用一次 `read_files(paths)` 调用比较最多 6 个文件，用 `submit_source` 提交候选并得到真实编译反馈。构建失败无需在代码里预先写死正确答案。两个 CI 项目使用不同目录、文件名和函数；第二个还有同名但声明不同的头文件。
 
+### 并行配置与失败定位（T1–T5）
+
+生成和运行 CLI 都支持 `--max-parallel-tools`、`--max-batch-calls`、`--max-tool-calls`，默认分别为 1、8、64；
+两阶段独立启动，参数需分别传入。运行时可在上面的命令末尾追加：
+
+```text
+--max-parallel-tools 4 --max-batch-calls 8 --max-tool-calls 64
+```
+
+4 是示例值，不是硬编码上限。生成阶段只有修改共享候选的 `submit_project`，开启参数也不会让它并行；
+运行阶段的快照读取工具已声明并行安全，`submit_source` 等写候选工具仍单独调用。
+`read_files(paths)` 本身是一次工具调用，不等于多线程批次。模型是否提出独立批次及实际峰值以 `execution.batches` 为准。
+
+两阶段通过 T1 的 `react_pattern()` 对齐模型侧和执行器限制。已有失败报告会按发生位置携带
+T2 的 `diagnostics` / `model_calls[].diagnostic` 或 T5 的 `model_calls[].http_error`；无可用调用记录的早期失败不虚构这些字段。
+含义见[并行与工具诊断](PARALLEL_TOOLS.md)、[HTTP 诊断](HTTP_DIAGNOSTICS.md)。HTTP 诊断不会自动改变重试策略。
+
 ## 4. 独立验收
 
 ```bash
@@ -51,6 +68,10 @@ python tools/verify_employee_project.py --project reports/employee-demo/project 
 检查器在生成代码之外，重新编译原始输入与候选，确认原来失败、现在通过；检查非 include 代码未变、patch 与候选一致、实际节点匹配生成清单、知识版本与消费记录匹配。生成和运行两个阶段都必须有真实模型调用，模拟 transport 不能通过 `--require-live`。
 
 运行命令还检查原始目录保持不变。归档后的独立核验只使用源码快照重放编译检查，不重新调用模型，也不替代对已不存在的原始目录的检查。
+
+当前共享运行器已自动记录 ReAct 执行配置、批次统计和尝试编号，但以上 CLI 没有自动调用
+`bind_manifest(..., production=True)` 或为每个业务检查生成 `record_check()` 回执，仍使用基础 v1 报告与本例编译验收。
+需要 T4 严格格式时须按[专门接线说明](PRODUCTION_EVIDENCE.md)补齐元数据和真实回执；仅追加核验参数不能升级旧报告。
 
 ## 当前边界与 Actions
 

@@ -53,6 +53,11 @@ python tools/verify_policy_workflow.py reports/config-live --require-live
 
 支持 `--protocol openai` 和已有模型、预算参数。每次实验固定一个协议，不把不同条件合并为因果结论。
 
+T1 已将本入口切换到 `react_pattern()` 统一装配。虽然 CLI 接受[并行参数](PARALLEL_TOOLS.md)，
+当前工具集只有共享候选提交动作，不能并行执行；调高并发数不会自动增加可并行工作。
+失败记录可包含 T2 工具诊断或 T5 [HTTP 诊断](HTTP_DIAGNOSTICS.md)。ReAct 执行统计自动记录，
+本案例仍用基础 v1 报告和配置判据；没有自动接入 T4 的[严格生产格式](PRODUCTION_EVIDENCE.md)检查回执。
+
 Actions 先运行 Python 3.9 / 3.13 回归，再执行 24 个真实模型试次，最多 48 次请求。工作流与产物链接见[第三阶段记录](../changelog/stage-03.md)。基线未通过验收属于有效测量；routed 未全通过、执行异常或独立核验失败会使工作流失败。
 
 触发方式：`feat/roadmap-*` 分支推送的最后一笔提交信息包含 `[roadmap-stage3-live]`；或在工作流可手动运行时选择 `policy_live=true`。普通提交只跑回归与离线验证。使用既有 `BIGMODEL_API_KEY` Actions Secret。每次运行的 Actions Summary 提供概览，artifact 保留 14 天。

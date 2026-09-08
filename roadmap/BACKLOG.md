@@ -15,3 +15,16 @@
 N01–N04 的首个受限闭环已通过：[第四阶段](../changelog/stage-04.md)。N05 的知识内容更新与行为回归两项均已实测通过，逐项回顾价值与限制见[第五阶段](../changelog/stage-05.md)；这不等于 N05 所有需求变化都已支持。接下来优先推进 N06 的真实构建配置/命令接入和业务验收，暂缓通用语义合并，再做第二员工与 N07，不用增加相似合成案例代替实际接入。
 
 每项功能记录入口、实际结果、受测源码版本和 Actions 链接。材料不足、生成不合法、启动失败、模型传输/协议错误、预算停止、候选不合格均保留；生成代码自称完成不算成功。
+
+## 实机反馈维护任务（独立于 N 系列）
+
+| 任务 | 状态 | 使用与验证 |
+|---|---|---|
+| T1 装配配置一致性 | 已完成 | [统一入口与限制](../docs/PARALLEL_TOOLS.md)、[原实施记录](../changelog/react-assembly-alignment-2026-09-07.md) |
+| T2 工具错误分类 | 已完成 | [安全诊断及错误码](../docs/PARALLEL_TOOLS.md)、[实施记录](../changelog/task-02-tool-diagnostics.md) |
+| T3 装配指导与配方 | 已完成 | [可运行配方](../examples/07_verified_assembly.py)、[实施记录](../changelog/task-03-assembly-guidance.md) |
+| T4 严格生产格式证据 | 已完成，显式接线/核验 | [来源、实际执行与验收回执](../docs/PRODUCTION_EVIDENCE.md)、[实施记录](../changelog/task-04-production-evidence.md) |
+| T5 HTTP 错误诊断 | 已完成 | [字段与边界](../docs/HTTP_DIAGNOSTICS.md)、[实施及 CI](../changelog/task-05-http-diagnostics.md) |
+| T6 MCP 内部并发 | 未实施 | 同一 Connector 内部仍串行；ReAct 线程并发不等于远端服务并发 |
+
+[T1–T5 文档同步复核](../changelog/docs-sync-t01-t05.md)记录本批维护与现有用户入口的对应关系。上述完成状态不代表 N06/N07 已完成。

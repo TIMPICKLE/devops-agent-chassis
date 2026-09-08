@@ -2,7 +2,7 @@
 
 本文对应 `feat/roadmap-showcase-v1` 分支。以“编译失败修复员工”为例，解释如何装配一个项目，以及每项行为在代码中如何落地。
 
-当前状态截至第五阶段，统一证据索引见[当前能力与验证](../roadmap/CURRENT_STATE.md)。第四阶段证明生成物实际运行；第五阶段证明知识更新后保留人工定制、改变同一输入的行为并通过旧任务回归。后文的通用装配示意、早期案例与已验证 CLI 分别说明。
+本文已同步第五阶段后的 T1–T5 维护，统一证据索引见[当前能力与验证](../roadmap/CURRENT_STATE.md)。第四阶段证明生成物实际运行；第五阶段证明知识更新后保留人工定制、改变同一输入的行为并通过旧任务回归。后续维护的合同测试与这些历史 live 结果分别记录，不扩大实测范围。
 
 第三阶段新增了可直接运行的[四节点配置修复与多文档路由案例](CONFIG_POLICY_WORKFLOW.md)，附真实流程、冻结任务与知识对照实验入口。
 
@@ -59,20 +59,25 @@
 
 ```python
 from agent_chassis.orchestration import (
-    AgentStep, FnStep, ReActPattern, StateMachineOrchestrator,
+    AgentStep, FnStep, StateMachineOrchestrator,
 )
+from adapters.runtime import react_pattern
 
-def make_flow(prepare, classify, decider, toolbox, compile_check):
+def make_flow(prepare, classify, config, decider, toolbox, compile_check):
+    pattern = react_pattern(config, decider, toolbox=toolbox)
     return StateMachineOrchestrator([
         FnStep("prepare", prepare),
         FnStep("classify", classify),
-        AgentStep("fix", pattern=ReActPattern(decider, max_iterations=4),
-                  toolbox=toolbox),
+        AgentStep("fix", pattern=pattern, toolbox=toolbox),
         FnStep("compile_check", compile_check),
     ])
 ```
 
 其中 `prepare`、`classify`、`compile_check` 的签名为 `(task, ctx) -> None`，通过明确的状态与产物交接。`FnStep` 不会自动把函数返回值写入 `ctx.facts`；如果编译检查需要阻止继续执行，回调必须显式抛出异常，或在所选编排中实现对应分支。仅返回 `False` 不会让状态机自动停止。
+
+`config` 与 decider 使用同一份 `ModelConfig`。T1 的统一入口会传入 `config.react_options()`，在首次请求前检查三项工具上限；
+若手工构造 `ReActPattern`，需另行调用 `validate_react_alignment()`。普通自定义 decider 仍可直接使用核心类。
+阶段名由编排器自动记录，回调无需重复 `ctx.record_step()`。
 
 最终完成标准通过 `.with_payload(source, criteria)` 配置。业务中间检查与最终验收应分清：`Chassis.judge()` 会缓存本次尝试的裁定，不应提前调用它后再修改候选。
 
@@ -189,6 +194,20 @@ flowchart TD
 
 `build()` 检查必要组件与判据接线，不是任意流程的形式化证明。装配 manifest 是描述性清单，当前不是一个能自动重建所有项目的可执行工作流文件。
 
+### T1–T5 在运行与报告中的对应关系
+
+| 能力 | 当前如何使用/观察 | 边界 |
+|---|---|---|
+| T1 配置一致性 | Showcase、policy、员工生成/运行复用 `react_pattern` | 检查并发、批次、任务动作三项上限；手工接线需显式预检 |
+| T2 工具诊断 | `diagnostics` / `model_calls[].diagnostic` 给出错误码及适用时的动作序号 | 整批预检失败零执行；不回显参数值或未知工具名 |
+| T3 装配指导 | Skill 配方和 [example 07](../examples/07_verified_assembly.py) 联结装配、客观判据与报告 | 示例是 test-decider，不能当作 live 模型证据 |
+| T4 执行与验收证据 | ReAct 自动记录 `execution.runs/batches`、峰值在途数及尝试编号；严格模式另需源码/装配绑定和 `record_check()` | 普通 CLI 未自动启用严格模式；名称叫 compile_check 不等于实际检查通过 |
+| T5 HTTP 诊断 | `model_calls[].http_error` 记录 HTTP 类别、白名单代码、请求 ID 指纹 | 不输出正文、不自动重试；未知 usage 仍为 null |
+
+生产格式检查使用 `verify_production_evidence.py`，检查完整性与内部一致性；
+`verify_employee_project.py` 则重放本例的编译及差异验收，两者不能互相替代。
+完整字段和接线见[并行与工具诊断](PARALLEL_TOOLS.md)、[生产格式证据](PRODUCTION_EVIDENCE.md)、[HTTP 诊断](HTTP_DIAGNOSTICS.md)。
+
 相关回归入口：[上下文实际传递](../tests/test_context_delivery.py)、[模型请求适配](../tests/test_model_runtime.py)、[客观停止仍保留最终验收](../tests/test_objective_stop.py)、[实验报告核验](../tests/test_context_experiment.py)。
 
 ### 四条验证路径，分别证明什么
@@ -219,6 +238,9 @@ flowchart TD
 
 ```bash
 python -m pip install -e ".[dev,llm]"
+
+# 不调用模型：复现统一装配、单调用/并行和严格证据检查
+python examples/07_verified_assembly.py
 
 # 不调用模型：检查装配、工具、判据和报告链路
 python tools/run_roadmap_showcase.py --mode offline --flow state_machine --output-dir reports/roadmap-showcase-review

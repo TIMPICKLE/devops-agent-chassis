@@ -24,7 +24,7 @@ Demo/mock 时，才保留规则模拟 decider/planner；不要把规则模拟描
 | [src/agent_chassis/contracts.py](../../../src/agent_chassis/contracts.py) | 开工前必读，唯一必须读懂的文件：全部抽象与 InjectionPoint 枚举 |
 | [src/agent_chassis/orchestration/reasoning.py](../../../src/agent_chassis/orchestration/reasoning.py) | 接真实 LLM / 外部 Agent 前读：确认 decider/planner/solver/critic 的当前签名 |
 | [adapters/runtime.py](../../../adapters/runtime.py) | 使用参考模型适配器时读：`react_pattern()` 统一装配入口及配置校验 |
-| [装配、验收与证据配方](references/runtime-assembly.md) | 生成 ReAct 装配时读：并行声明、独立验收、生产证据与可运行示例 |
+| [装配、验收与证据配方](references/runtime-assembly.md) | 生成 ReAct 装配或排查运行失败时读：统一配置、工具/HTTP 诊断、独立验收与证据接线 |
 | [payloads/code_quality.py](../../../payloads/code_quality.py) | 生成新载荷前读：TaskSource/DoneCriteria/ToolBox/decider/planner/critic 的范本 |
 | [examples/04_swap_payload.py](../../../examples/04_swap_payload.py) | 生成装配脚本前读：Chassis 链式接线 + 双载荷对照的范本 |
 | [examples/01_swap_orchestration.py](../../../examples/01_swap_orchestration.py) | 用户要 subgraph / llm_compiler / basic_reflection 时读：全部编排组合的构造配方 |
@@ -307,7 +307,8 @@ python -m pytest tests/ -q    # 预期：全部通过（确认没改坏底盘）
 装配报告里检查三件事：决策下放点是不是只有商量好的那一个；
 injection timeline 的 agent_boot 行是否为空；权限边界拒绝清单是否符合预期。
 
-另外核对最终生效的执行限制，并用至少一个真实批次验证并行接线；只有单调用的运行不能宣称已验证并行。
+另外核对最终生效的执行限制；启用并行后用实际独立批次验证接线，只有在途峰值大于 1 才能声称观察到并发。
+默认单调用装配不要求为了验收强行开启并行。测试替身的批次仅证明本地调度，不能当作 live 或远端并发证据。
 `repo.read` 不等于项目目录隔离，路径需解析后检查根目录归属（含符号链接），读取失败不能伪装成源码。
 编排器已自动记录阶段名，普通回调不要重复 `ctx.record_step()`。
 “生成候选”不等于“业务验证通过”或“已交付”：与用户约定独立验证项，用实际结果及证据引用记录；

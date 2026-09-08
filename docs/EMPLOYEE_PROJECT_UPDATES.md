@@ -36,6 +36,10 @@ python tools/verify_employee_project.py --project reports/employee-change/projec
 
 新版本记录仍为 `runtime_verified: false`，表示版本创建本身没有运行任务；独立的运行报告给出具体任务是否验收通过。原始生成调用是继承的，不能重复计算成更新调用。
 
+更新后的员工仍由同一共享运行器执行，适用 T1 的配置检查、T2/T5 的失败诊断及 T4 的自动 ReAct 遥测。
+并行参数和具体报告字段见[生成/运行说明](GENERATED_EMPLOYEE_PROJECT.md)；升级底盘不会把旧归档自动补成新格式。
+T4 [严格来源与回执检查](PRODUCTION_EVIDENCE.md)仍需显式接线，知识更新命令不会替业务新增这些回执或改写团队的 README。
+
 上述通用验收检查编译、修改范围和证据一致性，**不会自动判断任意新规范是否满足**。例如“必须选 v2 接口”的规则在下述演示外部检查器中另行实现；企业规范需要对应的业务验收代码。
 
 ## 比赛可演示的实际链路

@@ -197,7 +197,10 @@ SLSA provenance 描述构建来源与输入关系。C08 只在发行或组织要
 2026-09-05 实施复核：
 
 - 参考 adapter 使用智谱提供的 Anthropic 兼容入口 `/api/anthropic/v1/messages`，配置仅存模型名、入口与凭据环境变量名。兼容模式并不等于所有原厂参数在每个网关都支持，仍须以本分支 live 结果验证。[智谱兼容接口说明](https://docs.bigmodel.cn/cn/guide/develop/claude/introduction)
-- 原生工具调用参数使用 `input_schema`；为匹配当前逐步 ReAct 调用契约，显式设置 `disable_parallel_tool_use`。这不是实现了模型并行调度。[Anthropic 并行工具调用说明](https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use)
+- 原生工具调用参数使用 `input_schema`；为匹配当时的逐步 ReAct 调用契约，显式设置 `disable_parallel_tool_use`。首批实现当时没有模型工具并行调度。[Anthropic 并行工具调用说明](https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use)
 - 工作流沿用官方现行 `checkout@v7`、`setup-python@v7`、`upload-artifact@v7`，普通回归与付费 live 分开；版本号不是供应链审计结论。[Checkout](https://github.com/actions/checkout)、[Setup Python](https://github.com/actions/setup-python)、[Upload Artifact](https://github.com/actions/upload-artifact)
 
-这些资料支持接口选择，不证明本项目已经完成多模型对照或具有成本优势。实际完成状态与限制见 [IMPLEMENTATION.md](./IMPLEMENTATION.md)。
+这些资料支持接口选择，不证明本项目已经完成多模型对照或具有成本优势。首阶段快照见 [IMPLEMENTATION.md](./IMPLEMENTATION.md)。
+
+2026-09-08 状态补注：后续已实现可配置的 ReAct 独立工具并行和 T1–T5 维护；当前配置与边界见
+[并行说明](../docs/PARALLEL_TOOLS.md)及[当前状态](CURRENT_STATE.md)。本节保留上述首批接口选型的历史依据，不代表当前仅支持单调用。

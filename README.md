@@ -8,6 +8,8 @@
 
 新增能力：[ReAct 多工具并行调用](docs/PARALLEL_TOOLS.md)，支持显式声明的独立工具并发执行、整批校验、失败收尾和调用证据；默认兼容单调用。
 
+T1–T5 使用入口：[统一装配与工具诊断](docs/PARALLEL_TOOLS.md) · [装配/验收可运行示例](examples/07_verified_assembly.py) · [生产格式证据（显式开启）](docs/PRODUCTION_EVIDENCE.md) · [HTTP 错误诊断](docs/HTTP_DIAGNOSTICS.md)。逐项代码与文档对应关系见[文档同步复核](changelog/docs-sync-t01-t05.md)。
+
 🚗 一台数字员工 = 底盘（与业务无关的五大系统）+ 载荷（与业务有关的两项定义）。
 
 底盘回答的是任何 DevOps 数字员工都要回答的同一组问题：它可不可靠、怎么接外部系统、
@@ -24,13 +26,13 @@
 
 维护入口：[规范变化后更新员工项目](docs/EMPLOYEE_PROJECT_UPDATES.md)。预览影响、保留人工修改，并对新旧任务重新验收；实现回顾与 Actions 结果见[第五阶段](changelog/stage-05.md)。
 
-**当前已验证**：生成员工后运行两个源码项目；更新知识后，同一输入按新规范改变选择，两个旧任务继续通过。第五阶段 CI 回归 195 项通过。能力、限制和受测版本统一见[当前状态](roadmap/CURRENT_STATE.md)；以下各阶段数字保留其历史口径。
+**当前已验证**：生成员工后运行两个源码项目；更新知识后，同一输入按新规范改变选择，两个旧任务继续通过。后续 T1–T5 已补齐装配一致性、诊断和证据能力；[T5 受测版本](changelog/task-05-http-diagnostics.md)本地完整回归 350 项通过，Python 3.9 / 3.13 CI 通过，未新增企业 live 验证。能力、限制和受测版本统一见[当前状态](roadmap/CURRENT_STATE.md)；以下各阶段数字保留其历史口径。
 
 **第三阶段：[项目规范驱动的配置修复](docs/CONFIG_POLICY_WORKFLOW.md)**。按项目、环境和阶段匹配知识，通过四个实际节点生成并验收配置，配套冻结案例、三种知识策略对照与独立核验。进度与 Actions 结果见[第三阶段记录](changelog/stage-03.md)。
 
 第三阶段回归 177 项通过；真实模型 routed / full 各 8/8 验收通过，24 个试次证据核验通过。none 组 0/8，含 4 次执行异常，因此 live 工作流整体未通过。完整结果与成本计量限制见[实测说明](changelog/stage-03.md#真实模型结果--2026-09-06)。
 
-**快速了解每阶段变更：[变更概览](changelog/README.md)**。每项功能都记录用途、入口、测试与限制；最新见[第五阶段](changelog/stage-05.md)，此前完整生成链路见[第四阶段](changelog/stage-04.md)。
+**快速了解每阶段变更：[变更概览](changelog/README.md)**。每项功能都记录用途、入口、测试与限制；后续维护见[T1–T5 文档索引](changelog/docs-sync-t01-t05.md)，知识更新见[第五阶段](changelog/stage-05.md)，完整生成链路见[第四阶段](changelog/stage-04.md)。
 
 | 第二阶段新增 | 直接用途 |
 |---|---|
@@ -72,6 +74,14 @@ python examples/02_plug_connector.py       # 加一个外部系统，注册一�
 python examples/03_injection_timing.py     # 知识注入时机可视化
 python examples/04_swap_payload.py         # 换载荷，底盘装配代码一字不差
 python examples/05_permissions_and_failure.py  # 能力借来，权限不借
+python examples/06_parallel_tools.py       # 独立工具并行，默认仍支持单调用
+```
+
+装配、独立验收与生产格式证据的完整配方另需可选 `.[llm]` 依赖，但不发起模型请求：
+
+```bash
+python -m pip install -e ".[llm]"
+python examples/07_verified_assembly.py
 ```
 
 ---
@@ -290,10 +300,15 @@ def try_commit(message):
 
 ## 🔧 装配一台数字员工
 
+以下是自定义 decider 的默认单调用结构示意，业务变量由装配方提供。接参考模型适配器时，
+用 `react_pattern(config, decider, toolbox=box)` 统一传递配置；完整可运行接线见[示例 07](examples/07_verified_assembly.py)。
+
 ```python
 from agent_chassis import Chassis, ConsoleObserver, InjectionPoint, borrowed_executor
 from agent_chassis.knowledge import SkillLibrary, SkillProvider, by_extension
 from agent_chassis.orchestration import NestedOrchestrator, ReActPattern
+from agent_chassis.failure import Ledger, ZeroSideEffectPolicy
+from agent_chassis.observability import RecordingObserver
 
 chassis = (
     Chassis("代码质量治理数字员工")
@@ -302,7 +317,6 @@ chassis = (
         toolbox=box,
         pattern=ReActPattern(decide),             # 内层·Agent 设计模式
         delegate_at="agent_fix",
-        criteria=criteria,
     ))
     .mount("scanner", "mcp.stdio", command="sonarqube-mcp")
     .mount("vcs", "mcp.stdio", command="azure-devops-mcp")
@@ -351,6 +365,9 @@ src/agent_chassis/
 ├── permissions.py        权限边界
 ├── failure.py            失败契约、去重账本、开工前清理
 ├── observability.py      四张通用表与两个观察者
+├── diagnostics.py        工具预检的结构化安全诊断
+├── evidence.py           装配清单与可移植运行证据
+├── production.py         可选生产格式证据检查与源码指纹
 ├── orchestration/        外层流程编排
 │   └── reasoning.py      内层 Agent 设计模式
 ├── integration/          连接器与工具名容错解析
@@ -360,7 +377,9 @@ payloads/
 ├── code_quality.py       载荷 ① 代码质量治理
 └── pr_mention.py         载荷 ② PR 评论区 @Agent
 
-examples/                 五个可直接运行的演示
+adapters/                 模型协议、统一装配入口与 HTTP 诊断（仓库参考模块）
+schemas/                  装配和运行证据 v1 schema
+examples/                 01–07 演示；07 的证据核验需可选 .[llm]
 ```
 
 ---

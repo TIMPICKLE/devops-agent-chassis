@@ -36,6 +36,9 @@ toolbox = ToolBox().add(
 
 这是追加到原运行命令的参数片段。CLI 会同时配置模型协议和 ReAct：OpenAI 发送 `parallel_tool_calls: true`，Anthropic 发送 `disable_parallel_tool_use: false`。模型不保证每轮都会选择多个工具。只有提交类工具的装配仍只能单调用，不会因开启开关自动产生可并行工作。
 
+`4` 是配置示例，不是硬编码最大值；执行器接受正整数上限。增大并发仍受每批动作数、任务预算、可用线程和服务端限制约束。
+员工生成与运行是两个独立命令，需分别传入各自参数；具体可并行工具见[员工项目说明](GENERATED_EMPLOYEE_PROJECT.md)。
+
 直接在 Python 中装配 OpenAI，推荐用统一入口 `react_pattern`（自动应用 `config.react_options()` 并在装配期检查两侧上限一致）：
 
 ```python
@@ -49,8 +52,10 @@ config = ModelConfig(
     openai_parallel_tool_calls=True,
 )
 decider = OpenAIChatDecider(config, tool_names=toolbox.names())
-pattern = react_pattern(config, decider, toolbox=toolbox, stop_when=...)
+pattern = react_pattern(config, decider, toolbox=toolbox)
 ```
+
+需要客观提前停止时另传可调用的 `stop_when`，不能把 `...` 当作回调。完整的停止与最终判据配方见[示例 07](../examples/07_verified_assembly.py)。
 
 `react_pattern` 在构造时调用 `validate_react_alignment`：模型侧与执行器的 `max_parallel_tools` / `max_batch_calls` / `max_tool_calls` 不一致会立即报错，指出字段、两侧值和修正方式，而不是等到模型真的返回多个调用才在运行中失败；开启并行但没有任何工具声明 `parallel_safe=True` 时给出提示（不阻止运行）。手工装配仍可写 `ReActPattern(decider, **config.react_options())`，此时应自行调用 `adapters.runtime.validate_react_alignment(config, pattern, toolbox)` 做同样检查。自定义 decider（非模型适配器）继续可用，核心包不依赖适配器。
 
@@ -109,6 +114,9 @@ action = ("batch", [
 | `BATCH_LIMIT_EXCEEDED` / `TOOL_BUDGET_EXHAUSTED` | 每批上限或当前任务剩余动作预算 |
 
 有具体动作时附 1 起始的 `action_index`；只公开可信工具名、schema 声明路径和约束类型，不回显参数值、未知名称或原始 schema 错误。预检失败仍整批零执行；已发出的模型请求仍保留 token 记账。
+
+HTTP 请求失败走单独的 `ModelError.http_error` / `model_calls[].http_error`，不能把 HTTP 400 一概归因为并行配置错误。
+T5 的状态类别、白名单代码、关联指纹和不自动重试的边界见[HTTP 诊断](HTTP_DIAGNOSTICS.md)。
 
 ReAct 还记录最终执行限制、每批实际启动/结果计数和 `peak_in_flight`。配置大于 1 不等于实测发生并发，Connector 内部也可能仍串行。
 源码/装配关联与独立验收回执的显式检查见[生产格式证据](PRODUCTION_EVIDENCE.md)。

@@ -10,6 +10,14 @@
 返回多个动作并不代表实际并行；同一个工具用不同参数可组成独立批次，依赖前项结果的操作必须下一轮决策。
 共享候选写入和 contextual 工具保持单调用。完整说明见 [并行工具](../../../../docs/PARALLEL_TOOLS.md)。
 
+## 失败定位（T02 / T05）
+
+先区分装配期配置冲突、模型 HTTP 失败、模型响应/工具预检失败和实际工具执行失败。
+参考适配器的 `ModelError.diagnostic` 是 T02 工具诊断；`ModelError.http_error` 是 T05 HTTP 元数据，
+分别进入 `model_calls[].diagnostic` / `model_calls[].http_error`。批次级错误不一定有动作序号。
+HTTP 400 不能直接推断为并行缺陷；仅采用状态和固定白名单代码，不打印服务端原文或凭据。
+Retry-After 只是记录，不触发重试或自动改参数；详见 [HTTP 诊断](../../../../docs/HTTP_DIAGNOSTICS.md)。
+
 ## 独立验收与证据
 
 先约定具体检查和证据来源。候选有 diff 只能证明产生了修改；具体业务标准由载荷决定，核心不规定必须编译。
@@ -20,6 +28,8 @@ DoneCriteria 仍负责最终裁定，不能根据模型自述或步骤名称判�
 `EvidenceObserver.bind_manifest(..., production=True)` 在运行前校验必需元数据。
 运行后用 `verify_documents(..., require_production=True)` 检查配置、检查回执和实际并发统计是否一致。
 这不是签名认证、checkpoint 或重新执行验收；详情见 [生产证据](../../../../docs/PRODUCTION_EVIDENCE.md)。
+ReAct 遥测自动生成；严格绑定、必需检查和回执需显式接线，当前普通生成/运行 CLI 没有自动启用全部严格字段。
+任务重试时在本次流程准备阶段重新记录 `not_run`，不能沿用旧尝试的通过记录。
 
 ## 可运行参考
 
@@ -28,6 +38,7 @@ DoneCriteria 仍负责最终裁定，不能根据模型自述或步骤名称判�
 生成生产员工时替换为已验证的原生协议适配器，并使用其 `execution_mode`，不要直接把模式标签改成 live。
 
 ```bash
+python -m pip install -e ".[dev,llm]"
 python examples/07_verified_assembly.py
 python -m pytest tests/test_assembly_recipe.py -q
 ```
