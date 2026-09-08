@@ -149,6 +149,10 @@ def add_model_arguments(parser):
     parser.add_argument("--max-tokens", type=int, default=2048)
     parser.add_argument("--context-max-chars", type=int, default=12000)
     parser.add_argument("--timeout", type=float, default=60.0)
+    parser.add_argument("--stream", action="store_true",
+                        help="Receive SSE responses and validate the complete message before executing tools")
+    parser.add_argument("--openai-omit-stream-usage", action="store_true",
+                        help="OpenAI streaming only: omit stream_options for gateways that reject it")
     parser.add_argument("--max-parallel-tools", type=int, default=1,
                         help="Enable independent tool batches with this concurrency limit (default: 1)")
     parser.add_argument("--max-batch-calls", type=int, default=8)
@@ -166,6 +170,7 @@ def model_config(args):
                        timeout=args.timeout, context_max_chars=args.context_max_chars,
                        max_parallel_tools=args.max_parallel_tools, max_batch_calls=args.max_batch_calls,
                        max_tool_calls=args.max_tool_calls,
+                       stream=args.stream, openai_stream_include_usage=not args.openai_omit_stream_usage,
                        openai_parallel_tool_calls=None if args.openai_omit_parallel_tool_calls else args.max_parallel_tools > 1)
 
 

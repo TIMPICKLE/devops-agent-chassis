@@ -44,4 +44,9 @@ python -m pytest tests/test_assembly_recipe.py -q
 ```
 
 MCP 的 stdio / Streamable HTTP 已有真实集成测试；单连接内部仍串行，不能通过多线程包装宣称远端并行。
-参考模型适配器没有 structured-output 自动兜底或 SSE 流式解析；新增适配需单独实现和验证。
+参考模型适配器没有 structured-output 自动兜底。OpenAI Chat Completions / Anthropic Messages 已支持 SSE：
+服务要求流式时，在自定义脚本的 `ModelConfig` 中设置 `stream=True`，或向共用模型参数的生成/运行 CLI 分别传 `--stream`。
+流式片段完整结束并通过预检后才执行工具，不能边收参数边执行；流式与工具并行分别配置。
+OpenAI 网关明确拒绝 `stream_options` 时可设 `openai_stream_include_usage=False` 或传 `--openai-omit-stream-usage`，
+缺失用量保留 null，不自动重试或切换非流式。自定义 transport 仍返回聚合后的响应 dict，并保持测试模式标签。
+配置、限制及验证入口见 [流式模型接入](../../../../docs/STREAMING.md)。

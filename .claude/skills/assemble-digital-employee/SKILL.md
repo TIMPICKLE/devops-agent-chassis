@@ -229,7 +229,7 @@ calling。禁止要求用户把真实 Token/API Key 粘到待提交源码里。
 4. 把模型结构化结果解析成 `call` / `stop`，或启用后的 `("batch", [ToolRequest, ...], None)`；
 5. 执行前再次校验工具名和参数 schema，未知工具/非法参数直接拒绝，不做猜测执行。
 
-参考 `OpenAIChatDecider` / `AnthropicDecider` 依赖对应协议的原生工具调用，当前仅支持非流式响应。
+参考 `OpenAIChatDecider` / `AnthropicDecider` 依赖对应协议的原生工具调用，默认非流式；服务要求 SSE 时设置 `ModelConfig(stream=True)` 或 CLI `--stream`，完整响应重组并通过预检后才执行工具。用量选项与中断处理见 [运行接线配方](references/runtime-assembly.md)。
 Provider 不支持时，需另行实现严格 structured-output schema + parser 适配器；仓库没有自动兜底。
 先按目标 Endpoint 做无副作用 smoke test，不把某个网关配置的结果泛化为整个模型的能力。
 解析失败进入可观测失败，不从自由文本猜参数。执行配置用 `react_pattern(config, decider, toolbox=box, ...)`

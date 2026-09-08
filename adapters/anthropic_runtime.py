@@ -2,7 +2,7 @@
 
 ModelConfig, ModelError and post_json remain importable here for compatibility.
 """
-from adapters.runtime import ModelConfig, ModelError, RuntimeDecider, ToolRequest, post_json
+from adapters.runtime import ModelConfig, ModelError, RuntimeDecider, ToolRequest, post_json, post_anthropic_stream
 from agent_chassis.diagnostics import ToolDiagnostic
 
 
@@ -10,14 +10,18 @@ class AnthropicDecider(RuntimeDecider):
     adapter_name = "anthropic-messages"
     consumer = "anthropic-runtime"
     endpoint = "/v1/messages"
+    stream_transport = staticmethod(post_anthropic_stream)
 
     def request_headers(self, key):
         return {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
 
     def request_body(self, user_input, tools):
-        return {"model": self.config.model, "max_tokens": self.config.max_tokens,
+        body = {"model": self.config.model, "max_tokens": self.config.max_tokens,
                 "system": self.system_prompt, "messages": [{"role": "user", "content": user_input}],
                 "tools": tools, "tool_choice": {"type": "auto", "disable_parallel_tool_use": self.config.max_parallel_tools < 2}}
+        if self.config.stream:
+            body["stream"] = True
+        return body
 
     def parse_response(self, response):
         content = response.get("content")

@@ -29,6 +29,8 @@ python tools/update_employee.py --project PROJECT_BASE --working-copy PROJECT_WO
 
 使用原运行命令，改为指向新项目；不仅重跑原有任务，还要加入能区分新旧规范的任务。
 
+模型服务要求流式时，运行命令仍需追加 `--stream`；更新项目不会自动继承先前 CLI 的流式开关。预览、应用及核验不调用模型，也无需流式参数。详见[流式接入](STREAMING.md)。
+
 ```bash
 python tools/run_generated_employee.py --project reports/employee-change/project --repo SOURCE_DIR --unit app/main.cpp --output-dir reports/employee-change/task
 python tools/verify_employee_project.py --project reports/employee-change/project --report reports/employee-change/task --require-live

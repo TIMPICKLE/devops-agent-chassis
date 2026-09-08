@@ -8,6 +8,8 @@
 
 新增能力：[ReAct 多工具并行调用](docs/PARALLEL_TOOLS.md)，支持显式声明的独立工具并发执行、整批校验、失败收尾和调用证据；默认兼容单调用。
 
+流式服务：[OpenAI / Anthropic SSE 接入](docs/STREAMING.md)。CLI 使用 `--stream`，自定义脚本设置 `ModelConfig(stream=True)`；完整重组工具调用后才执行，保留用量和失败记录。
+
 T1–T5 使用入口：[统一装配与工具诊断](docs/PARALLEL_TOOLS.md) · [装配/验收可运行示例](examples/07_verified_assembly.py) · [生产格式证据（显式开启）](docs/PRODUCTION_EVIDENCE.md) · [HTTP 错误诊断](docs/HTTP_DIAGNOSTICS.md)。逐项代码与文档对应关系见[文档同步复核](changelog/docs-sync-t01-t05.md)。
 
 服务器实测排错：[模型接入边界](docs/MODEL_COMPATIBILITY.md)。无安全工具的并行告警已明确为“单调用可用，批次整批拒绝”，不承诺自动降级；本次归属分析和修复见 [V5 实测复核](changelog/server-v5-review-2026-09-08.md)。

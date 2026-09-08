@@ -1,4 +1,4 @@
-"""OpenAI-compatible, non-streaming Chat Completions function-call adapter.
+"""OpenAI-compatible Chat Completions function-call adapter, with optional SSE.
 
 This implements single calls and opt-in independent batches, not the Responses API
 or universal compatibility with every provider's optional parameters.
@@ -7,7 +7,7 @@ does not relax response validation or cause automatic retries.
 """
 import json
 
-from adapters.runtime import ModelError, RuntimeDecider, ToolRequest
+from adapters.runtime import ModelError, RuntimeDecider, ToolRequest, post_openai_stream
 from agent_chassis.diagnostics import ToolDiagnostic
 
 
@@ -16,12 +16,13 @@ class OpenAIChatDecider(RuntimeDecider):
     consumer = "openai-runtime"
     endpoint = "/chat/completions"
     usage_fields = ("prompt_tokens", "completion_tokens")
+    stream_transport = staticmethod(post_openai_stream)
 
     def request_headers(self, key):
         return {"Authorization": "Bearer " + key, "content-type": "application/json"}
 
     def request_body(self, user_input, tools):
-        body = {"model": self.config.model, "max_tokens": self.config.max_tokens, "stream": False,
+        body = {"model": self.config.model, "max_tokens": self.config.max_tokens, "stream": self.config.stream,
                 "messages": [{"role": "system", "content": self.system_prompt},
                              {"role": "user", "content": user_input}],
                 "tools": [{"type": "function", "function": {
@@ -30,6 +31,8 @@ class OpenAIChatDecider(RuntimeDecider):
                 }} for tool in tools], "tool_choice": "auto"}
         if self.config.openai_parallel_tool_calls is not None:
             body["parallel_tool_calls"] = self.config.openai_parallel_tool_calls
+        if self.config.stream and self.config.openai_stream_include_usage:
+            body["stream_options"] = {"include_usage": True}
         return body
 
     def parse_response(self, response):

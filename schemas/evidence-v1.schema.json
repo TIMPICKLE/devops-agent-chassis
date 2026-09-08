@@ -95,6 +95,7 @@
       "properties": {
         "adapter": {"type": "string"}, "model": {"type": "string"}, "resolved_model": {"type": "string"},
         "mode": {"enum": ["live", "test-transport"]}, "ok": {"type": "boolean"},
+        "stream": {"type": "boolean"},
         "elapsed_ms": {"$ref": "#/$defs/count"}, "request_id": {"type": "string"}, "error_type": {"type": "string"},
         "diagnostic": {"$ref": "#/$defs/diagnostic"},
         "http_error": {"$ref": "#/$defs/http_error"},

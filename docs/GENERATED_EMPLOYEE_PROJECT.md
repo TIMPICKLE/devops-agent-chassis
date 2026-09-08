@@ -31,6 +31,8 @@ python tools/assemble_employee.py --request-dir employee_requests/build_repair -
 
 ## 3. 运行生成物
 
+服务要求 SSE 时，生成命令与下方运行命令都追加 `--stream`。流式响应完整接收并通过预检后才执行工具；中途断开不会执行半成品调用。自定义配置与 OpenAI 用量选项见[流式接入](STREAMING.md)。
+
 ```bash
 python tools/run_generated_employee.py --project reports/employee-demo/project --repo tests/employee_projects/pricing --unit src/main.cpp --output-dir reports/employee-demo/pricing
 python tools/run_generated_employee.py --project reports/employee-demo/project --repo tests/employee_projects/scheduler --unit app/worker.cpp --output-dir reports/employee-demo/scheduler

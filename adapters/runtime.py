@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from adapters.http_diagnostics import http_diagnostic
+from adapters.streaming import StreamError, anthropic_message, openai_message
 from agent_chassis.contracts import InjectionPoint, RunContext, Task
 from agent_chassis.diagnostics import ToolDiagnostic
 from agent_chassis.orchestration.reasoning import ReActPattern, ToolRequest, validate_batch
@@ -73,15 +74,23 @@ class _NoRedirect(HTTPRedirectHandler):
         raise ModelError("Model endpoint redirects are not followed")
 
 
-def post_json(url: str, headers: Mapping[str, str], body: Dict[str, Any], timeout: float) -> Dict[str, Any]:
+def _post(url, headers, body, timeout, stream_reader=None):
+    if stream_reader is not None:
+        headers = {**headers, "Accept": "text/event-stream"}
     request = Request(url, data=json.dumps(body, ensure_ascii=False, allow_nan=False).encode("utf-8"),
                       headers=dict(headers), method="POST")
     try:
         with build_opener(_NoRedirect()).open(request, timeout=timeout) as response:
-            data = response.read(2_000_001)
-            if len(data) > 2_000_000:
-                raise ModelError("Model response exceeds 2 MB")
-            payload = json.loads(data)
+            if stream_reader is not None:
+                content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                if content_type != "text/event-stream":
+                    raise ModelError("Expected text/event-stream response; no fallback performed")
+                payload = stream_reader(response)
+            else:
+                data = response.read(2_000_001)
+                if len(data) > 2_000_000:
+                    raise ModelError("Model response exceeds 2 MB")
+                payload = json.loads(data)
     except HTTPError as exc:
         try:
             detail = http_diagnostic(exc)
@@ -92,13 +101,27 @@ def post_json(url: str, headers: Mapping[str, str], body: Dict[str, Any], timeou
                 pass
         reason = detail.get("provider_code") or detail.get("provider_type") or detail["category"]
         raise ModelError(f"Model HTTP status {exc.code} ({reason})", http_error=detail) from None
-    except (URLError, TimeoutError, OSError):
+    except StreamError as exc:
+        raise ModelError(str(exc)) from None
+    except (URLError, TimeoutError, OSError, HTTPException):
         raise ModelError("Model transport failed or timed out") from None
-    except (UnicodeError, ValueError):
+    except (UnicodeError, ValueError, RecursionError):
         raise ModelError("Model returned invalid JSON") from None
     if not isinstance(payload, dict) or "error" in payload:
         raise ModelError("Model returned an error or non-object response")
     return payload
+
+
+def post_json(url: str, headers: Mapping[str, str], body: Dict[str, Any], timeout: float) -> Dict[str, Any]:
+    return _post(url, headers, body, timeout)
+
+
+def post_openai_stream(url, headers, body, timeout):
+    return _post(url, headers, body, timeout, openai_message)
+
+
+def post_anthropic_stream(url, headers, body, timeout):
+    return _post(url, headers, body, timeout, anthropic_message)
 
 
 @dataclass(frozen=True)
@@ -115,6 +138,8 @@ class ModelConfig:
     max_parallel_tools: int = 1
     max_batch_calls: int = 8
     max_tool_calls: int = 64
+    stream: bool = False
+    openai_stream_include_usage: bool = True
 
     def __post_init__(self):
         url = urlsplit(self.base_url)
@@ -124,6 +149,8 @@ class ModelConfig:
             raise ValueError("Model, key reference and positive limits are required")
         if self.context_max_chars < 0:
             raise ValueError("context_max_chars cannot be negative")
+        if type(self.stream) is not bool or type(self.openai_stream_include_usage) is not bool:
+            raise ValueError("stream and openai_stream_include_usage must be booleans")
         if self.openai_parallel_tool_calls is not None and type(self.openai_parallel_tool_calls) is not bool:
             raise ValueError("openai_parallel_tool_calls must be a boolean or None (omit)")
         for value in (self.max_parallel_tools, self.max_batch_calls, self.max_tool_calls):
@@ -217,6 +244,7 @@ class RuntimeDecider:
     adapter_name = "abstract"
     consumer = "runtime"
     endpoint = ""
+    stream_transport = None
     usage_fields = ("input_tokens", "output_tokens")
 
     def __init__(self, config: ModelConfig, *, tool_names: Sequence[str],
@@ -225,11 +253,13 @@ class RuntimeDecider:
             raise ValueError("Provide distinct explicitly allowed tool names")
         self.config = config
         self.tool_names = tuple(tool_names)
-        self.transport = transport if transport is not None else post_json
+        self.transport = transport if transport is not None else (self.stream_transport if config.stream else post_json)
+        if self.transport is None:
+            raise ValueError("This adapter does not provide a streaming transport")
 
     @property
     def execution_mode(self) -> str:
-        return "live" if self.transport is post_json else "test-transport"
+        return "live" if self.transport in (post_json, post_openai_stream, post_anthropic_stream) else "test-transport"
 
     def request_body(self, user_input, tools):
         raise NotImplementedError
@@ -305,6 +335,7 @@ class RuntimeDecider:
             raise ModelError("Task and observations exceed the reference adapter input limit")
         record = {"adapter": self.adapter_name, "model": config.model,
                   "mode": self.execution_mode,
+                  "stream": config.stream,
                   "ok": False, "input_tokens": None, "output_tokens": None}
         started = time.monotonic()
         try:
