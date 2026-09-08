@@ -19,6 +19,7 @@ dependencies = []
 
 [project.optional-dependencies]
 mcp = ["mcp>=2.1,<3"]
+llm = ["jsonschema>=4.20,<5"]
 dev = ["pytest>=7"]
 
 [project.urls]

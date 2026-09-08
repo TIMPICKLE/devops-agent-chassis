@@ -1,0 +1,216 @@
+"""Run the same assembly against two payloads; live is the default, offline explicit.
+
+Examples:
+  python tools/run_roadmap_showcase.py --mode live
+  python tools/run_roadmap_showcase.py --mode offline --flow nested
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import uuid
+from dataclasses import asdict
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))
+
+from agent_chassis import Chassis, InjectionPoint as P, Outcome, borrowed_executor
+from agent_chassis.evidence import EvidenceObserver, assembly_manifest
+from agent_chassis.failure import ZeroSideEffectPolicy
+from agent_chassis.knowledge import SkillLibrary, SkillProvider, StaticKnowledge, by_extension
+from agent_chassis.orchestration import AgentStep, FnStep, NestedOrchestrator, SingleAgentOrchestrator, StateMachineOrchestrator
+from adapters.anthropic_runtime import AnthropicDecider, ModelConfig
+from adapters.openai_runtime import OpenAIChatDecider
+from adapters.runtime import DEFAULT_ENDPOINTS, RuntimeDecider, react_pattern
+from payloads.patch_showcase import Candidate, HeaderBuildCriteria, HeaderBuildSource, PythonNoneCriteria, PythonQualitySource, fixture_solution, patch_tools, submission_ready
+
+
+SCENARIOS = ("python_quality", "header_build")
+CONTEXT_POLICIES = ("routed", "full", "none")
+SKILL_CONTENT = {
+    "python-quality": "Use identity comparisons for None. Keep the public function signature and all other AST structure.",
+    "cpp-build": "Use a header path from the supplied inventory. Change only the include line; preserve the program body.",
+}
+
+
+def assemble(scenario, *, mode="live", flow="nested", config=None, code_ref="unknown", decider=None,
+             stop_policy="objective", protocol="anthropic", context_policy="routed"):
+    factories = {"python_quality": (PythonQualitySource, PythonNoneCriteria),
+                 "header_build": (HeaderBuildSource, HeaderBuildCriteria)}
+    if (mode not in {"live", "offline"} or flow not in {"nested", "state_machine", "single_agent"}
+            or stop_policy not in {"objective", "model"} or protocol not in DEFAULT_ENDPOINTS
+            or context_policy not in CONTEXT_POLICIES):
+        raise ValueError("Unsupported mode or flow")
+    source_type, criteria_type = factories[scenario]
+    source = source_type()
+    task = source.task
+    candidate = Candidate(task.payload["source"], task.payload["target"]["path"])
+    criteria = criteria_type(candidate)
+    boundary = borrowed_executor("patch-executor")
+    toolbox = patch_tools(candidate, criteria, task, boundary)
+    config = config if config is not None else ModelConfig(model="glm-5.3-flash", base_url=DEFAULT_ENDPOINTS[protocol])
+
+    def offline_decide(task, ctx, box):
+        ctx.chassis.inject(P.BEFORE_EXECUTOR, task, ctx)
+        ctx.context_for("offline-fixture-replay", [P.BEFORE_EXECUTOR], max_chars=config.context_max_chars)
+        if ctx.tool_calls:
+            return "stop", "offline fixture replay complete (not a model call)", None
+        return "call", "submit_source", {"content": fixture_solution(task)}
+
+    if decider is None:
+        adapter = AnthropicDecider if protocol == "anthropic" else OpenAIChatDecider
+        decider = offline_decide if mode == "offline" else adapter(config, tool_names=toolbox.names())
+    execution_mode = ("offline-contract" if decider is offline_decide else
+                      decider.execution_mode if isinstance(decider, RuntimeDecider) else "test-decider")
+    pattern = react_pattern(config, decider, toolbox=toolbox,
+                            stop_when=(lambda t, c: submission_ready(candidate, c)) if stop_policy == "objective" else None)
+    if flow == "single_agent":
+        orchestrator = SingleAgentOrchestrator(toolbox, pattern)
+    elif flow == "state_machine":
+        orchestrator = StateMachineOrchestrator([AgentStep("work", pattern=pattern, toolbox=toolbox)])
+    else:
+        orchestrator = NestedOrchestrator([FnStep("work", lambda t, c: None)], toolbox, pattern, "work")
+    skills = SkillLibrary("", rules=[by_extension({".py": "python-quality", ".cpp": "cpp-build"})], inline=SKILL_CONTENT)
+    providers = []
+    if context_policy == "routed":
+        providers = [SkillProvider(skills)]
+    elif context_policy == "full":
+        # Identical skill text and headers; full only adds the other skill.
+        providers = [StaticKnowledge(f"### 参考规范：{name}\n\n{body}", points=[P.BEFORE_EXECUTOR], name=name)
+                     for name, body in SKILL_CONTENT.items()]
+    policy = ZeroSideEffectPolicy()
+    policy.register_cleanup("discard-owned-candidate", candidate.cleanup)
+    evidence = EvidenceObserver(code_ref=code_ref, mode=execution_mode)
+    chassis = (Chassis("patch-showcase").with_orchestrator(orchestrator)
+               .with_payload(source, criteria).with_boundary(boundary)
+               .with_knowledge(*providers).with_failure_policy(policy).observe(evidence).build())
+    runtime = {"mode": execution_mode, "requested_mode": mode,
+               "stop_policy": stop_policy, "protocol": protocol, "context_policy": context_policy, "flow": flow,
+               "adapter": decider.adapter_name if isinstance(decider, RuntimeDecider) else
+                          "fixture-replay" if decider is offline_decide else "custom-decider"}
+    runtime["config"] = asdict(config)  # Contains the ENV NAME, never its value.
+    manifest = assembly_manifest(chassis.report(), runtime=runtime)
+    evidence.assembly_id = manifest["content_id"]
+    return chassis, candidate, evidence, manifest
+
+
+def source_revision():
+    revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
+    code_ref = revision.stdout.strip() if revision.returncode == 0 else "unknown"
+    dirty = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True)
+    return code_ref + ("+dirty" if dirty.stdout.strip() else "")
+
+
+def write_json(path, document):
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(document, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def execute_scenario(scenario, output, *, prefix=None, **assembly):
+    """Run one fresh assembly and persist its evidence, including failed verdicts."""
+    prefix = prefix or scenario
+    chassis, candidate, evidence, manifest = assemble(scenario, **assembly)
+    write_json(output / (prefix + ".manifest.json"), manifest)
+    print(f"Starting {prefix} ({manifest['runtime']['mode']})", flush=True)
+    try:
+        result = chassis.run_once()
+        evidence.dump(str(output / (prefix + ".evidence.json")))
+        if result.outcome is Outcome.SUCCEEDED:
+            # Keep LF byte-for-byte: the verifier digests the exact patch text.
+            with (output / (prefix + ".patch")).open("w", encoding="utf-8", newline="\n") as patch_file:
+                patch_file.write(candidate.patch())
+        run = evidence.runs[0]
+        case = {"scenario": scenario, "outcome": result.outcome.value,
+                "reason": result.verdict.reason if result.verdict else result.error,
+                "execution_mode": run["mode"], "model_calls": len(run["model_calls"]),
+                "stop_reason": run["stop_reason"], "usage": run["usage"], "input_id": run["input_id"],
+                "context_chars": sum(receipt["chars"] for receipt in run["context_receipts"]),
+                "elapsed_ms": run["elapsed_ms"], "manifest": prefix + ".manifest.json",
+                "evidence": prefix + ".evidence.json"}
+        print(f"Finished {prefix}: {case['outcome']}; model_calls={case['model_calls']}; "
+              f"stop={case['stop_reason']}; tokens={case['usage']['input_tokens']}/{case['usage']['output_tokens']}", flush=True)
+        return case
+    finally:
+        chassis.close()
+
+
+def add_model_arguments(parser):
+    parser.add_argument("--protocol", choices=list(DEFAULT_ENDPOINTS), default="anthropic")
+    parser.add_argument("--model")
+    parser.add_argument("--base-url")
+    parser.add_argument("--api-key-env", default="BIGMODEL_API_KEY")
+    parser.add_argument("--max-calls", type=int, default=8)
+    parser.add_argument("--max-tokens", type=int, default=2048)
+    parser.add_argument("--context-max-chars", type=int, default=12000)
+    parser.add_argument("--timeout", type=float, default=60.0)
+    parser.add_argument("--stream", action="store_true",
+                        help="Receive SSE responses and validate the complete message before executing tools")
+    parser.add_argument("--openai-omit-stream-usage", action="store_true",
+                        help="OpenAI streaming only: omit stream_options for gateways that reject it")
+    parser.add_argument("--max-parallel-tools", type=int, default=1,
+                        help="Enable independent tool batches with this concurrency limit (default: 1)")
+    parser.add_argument("--max-batch-calls", type=int, default=8)
+    parser.add_argument("--max-tool-calls", type=int, default=64,
+                        help="Task-wide tool action budget, including failed attempts")
+    parser.add_argument("--openai-omit-parallel-tool-calls", action="store_true",
+                        help="OpenAI only: omit the wire parameter; local concurrency limits still apply")
+
+
+def model_config(args):
+    prefix = args.protocol.upper()
+    return ModelConfig(model=args.model or os.environ.get(prefix + "_MODEL", "glm-5.3-flash"),
+                       base_url=args.base_url or os.environ.get(prefix + "_BASE_URL", DEFAULT_ENDPOINTS[args.protocol]),
+                       api_key_env=args.api_key_env, max_calls=args.max_calls, max_tokens=args.max_tokens,
+                       timeout=args.timeout, context_max_chars=args.context_max_chars,
+                       max_parallel_tools=args.max_parallel_tools, max_batch_calls=args.max_batch_calls,
+                       max_tool_calls=args.max_tool_calls,
+                       stream=args.stream, openai_stream_include_usage=not args.openai_omit_stream_usage,
+                       openai_parallel_tool_calls=None if args.openai_omit_parallel_tool_calls else args.max_parallel_tools > 1)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mode", choices=["live", "offline"], default="live")
+    parser.add_argument("--flow", choices=["nested", "state_machine", "single_agent"], default="nested")
+    parser.add_argument("--scenario", choices=["all", "python_quality", "header_build"], default="all")
+    parser.add_argument("--stop-policy", choices=["objective", "model"], default="objective")
+    parser.add_argument("--context-policy", choices=CONTEXT_POLICIES, default="routed")
+    parser.add_argument("--output-dir", type=Path)
+    add_model_arguments(parser)
+    args = parser.parse_args(argv)
+    if args.mode == "live" and not os.environ.get(args.api_key_env):
+        parser.error(f"{args.api_key_env} is missing. Live mode will NOT fall back to a fixture.")
+    config = model_config(args)
+    output = args.output_dir or ROOT / "reports" / ("roadmap-showcase-" + uuid.uuid4().hex[:10])
+    output.mkdir(parents=True, exist_ok=False)
+    code_ref = source_revision()
+    scenarios = SCENARIOS if args.scenario == "all" else [args.scenario]
+    summary = {"schema_version": "agent-chassis.showcase/v1", "mode": args.mode, "flow": args.flow,
+               "code_ref": code_ref, "stop_policy": args.stop_policy, "protocol": args.protocol,
+               "context_policy": args.context_policy, "cases": [], "is_benchmark": False}
+    for scenario in scenarios:
+        summary["cases"].append(execute_scenario(scenario, output, mode=args.mode, flow=args.flow,
+            config=config, code_ref=code_ref, stop_policy=args.stop_policy, protocol=args.protocol,
+            context_policy=args.context_policy))
+        write_json(output / "summary.json", summary)
+    summary["all_passed"] = all(case["outcome"] == "succeeded" for case in summary["cases"])
+    (output / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    label = "真实模型运行" if args.mode == "live" else "离线合同回放（不是 AI 实测）"
+    lines = ["# Roadmap Showcase", "", label, "", "| 场景 | 结果 | 模型调用 | 停止原因 | 输入 / 输出 token |", "|---|---|---:|---|---|"]
+    lines += [f'| {case["scenario"]} | {case["outcome"]} | {case["model_calls"]} | {case["stop_reason"]} | '
+              f'{case["usage"]["input_tokens"]} / {case["usage"]["output_tokens"]} |' for case in summary["cases"]]
+    lines += ["", "只验证两个公开窄场景，不是生产基准或竞品优劣结论。", ""]
+    (output / "summary.md").write_text("\n".join(lines), encoding="utf-8")
+    print("\n".join(lines))
+    print(f"Evidence: {output}")
+    return 0 if summary["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

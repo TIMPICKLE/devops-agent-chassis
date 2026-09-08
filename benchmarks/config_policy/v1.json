@@ -1,0 +1,16 @@
+{
+  "version": "config-policy-public/v1",
+  "description": "Four public synthetic regression cases, not private enterprise tasks or an unseen holdout.",
+  "documents": [
+    {"name": "atlas-runtime", "version": "2026-09-v1", "scope": {"project": "atlas"}, "rules": {"capacity_per_replica": 73, "cpu_millicores": 420, "port": 8127}},
+    {"name": "lyra-runtime", "version": "2026-09-v1", "scope": {"project": "lyra"}, "rules": {"capacity_per_replica": 41, "cpu_millicores": 275, "port": 9136}},
+    {"name": "production-rollout", "version": "2026-09-v1", "scope": {"environment": "production"}, "rules": {"reserve_replicas": 2, "minimum_replicas": 4, "timeout_ms": 2300, "rollout_batch": 1}},
+    {"name": "staging-rollout", "version": "2026-09-v1", "scope": {"environment": "staging"}, "rules": {"reserve_replicas": 0, "minimum_replicas": 1, "timeout_ms": 870, "rollout_batch": 2}}
+  ],
+  "cases": [
+    {"id": "atlas-production", "project": "atlas", "environment": "production", "peak_rps": 219},
+    {"id": "atlas-staging", "project": "atlas", "environment": "staging", "peak_rps": 91},
+    {"id": "lyra-production", "project": "lyra", "environment": "production", "peak_rps": 410},
+    {"id": "lyra-staging", "project": "lyra", "environment": "staging", "peak_rps": 33}
+  ]
+}

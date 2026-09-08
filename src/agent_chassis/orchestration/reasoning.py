@@ -10,7 +10,7 @@
     ├─ Plan-and-Execute   每步再问一次模型，失败可重规划
     ├─ Plan-and-Solve     一次调用出计划即答案，执行期不再问
     ├─ ReWOO              计划带 #E1 证据变量，执行后 Solver 汇总
-    └─ LLMCompiler        规划出带依赖的 DAG，无依赖任务并行成波次
+    └─ LLMCompiler        规划出带依赖的 DAG，按依赖分波（当前波内串行）
 
     做完再回头看（装饰器，包住上面任一种）
     ├─ Basic Reflection   纯自评，固定轮数，反思用完即弃
@@ -24,6 +24,10 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
+from copy import deepcopy
+from threading import Lock
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -35,6 +39,7 @@ from ..contracts import (
     Task,
     ToolCall,
 )
+from ..diagnostics import ToolDiagnostic
 
 reasoning_registry = Registry("reasoning-pattern")
 
@@ -44,8 +49,48 @@ reasoning_registry = Registry("reasoning-pattern")
 # ═══════════════════════════════════════════════════════════
 
 #: ReAct 用：给定当前状态，决定下一步
-#: 返回 ("call", tool_name, kwargs) 或 ("stop", reason, None)
+#: 返回 ("call", tool_name, kwargs)、("batch", [ToolRequest, ...], None)
+#: 或 ("stop", reason, None)。批次中的动作必须互相独立。
 Decide = Callable[[Task, RunContext, Any], tuple]
+
+
+@dataclass(frozen=True)
+class ToolRequest:
+    """One independent action within a ReAct batch; IDs are unique per batch."""
+    call_id: str
+    name: str
+    args: Dict[str, Any] = field(default_factory=dict)
+
+
+def validate_batch(toolbox: Any, requests: Any, limit: int) -> None:
+    if not isinstance(requests, (list, tuple)) or len(requests) < 2:
+        raise ToolDiagnostic("INVALID_BATCH")
+    if len(requests) > limit:
+        raise ToolDiagnostic("BATCH_LIMIT_EXCEEDED")
+    seen = set()
+    for index, request in enumerate(requests, 1):
+        if not isinstance(request, ToolRequest):
+            raise ToolDiagnostic("INVALID_BATCH", action_index=index)
+        if not isinstance(request.call_id, str) or not request.call_id or len(request.call_id) > 200:
+            raise ToolDiagnostic("INVALID_CALL_ID", action_index=index)
+        if request.call_id in seen:
+            raise ToolDiagnostic("DUPLICATE_CALL_ID", action_index=index)
+        if not isinstance(request.name, str):
+            raise ToolDiagnostic("UNKNOWN_TOOL", action_index=index)
+        if not isinstance(request.args, dict):
+            raise ToolDiagnostic("INVALID_TOOL_ARGUMENTS", action_index=index)
+        seen.add(request.call_id)
+        validator = getattr(toolbox, "validate_parallel_call", None)
+        if not callable(validator):
+            raise ValueError("ToolBox must explicitly support parallel-safe validation")
+        try:
+            validator(request.name, request.args)
+        except ToolDiagnostic as error:
+            raise ToolDiagnostic(error.code, **{**error.details, "action_index": index}) from None
+
+
+class BatchToolError(RuntimeError):
+    """All submitted workers have settled; caller may safely enter cleanup."""
 
 #: 线性规划器（Plan-and-Execute / Plan-and-Solve / ReWOO）：一次给出完整计划
 #: 返回 [(tool_name, kwargs), ...]；ReWOO 的 kwargs 里可写 "#E1" 引用前面步骤的结果
@@ -107,7 +152,11 @@ def invoke_tool(
 
     t0 = time.time()
     try:
-        out = toolbox.call(tool, **kwargs)
+        contextual = getattr(toolbox, "call_with_context", None)
+        if callable(contextual):
+            out = contextual(tool, task, ctx, **kwargs)
+        else:
+            out = toolbox.call(tool, **kwargs)
         rec = ToolCall(name=tool, args=kwargs, result=out, ok=True,
                        elapsed_ms=int((time.time() - t0) * 1000))
     except Exception as exc:
@@ -138,6 +187,96 @@ def _substitute(args: Dict[str, Any], evidence: Dict[str, Any]) -> Dict[str, Any
     return out
 
 
+def _invoke_batch(toolbox, requests, task, ctx, executor_tools, max_workers, execution_id):
+    # No worker receives task/ctx. Injections, facts and observers stay on the
+    # coordinator thread. A copy also prevents aliased arguments racing.
+    requests = [deepcopy(request) for request in requests]
+    batch_id = f"react-{ctx.iterations}-{ctx.tool_actions_started}"
+    if ctx.chassis is not None:
+        for request in requests:
+            point = (InjectionPoint.BEFORE_EXECUTOR if request.name in executor_tools
+                     else InjectionPoint.BEFORE_TOOL)
+            ctx.chassis.inject(point, task, ctx)
+
+    completed = [None] * len(requests)
+    lock = Lock()
+    active = peak = started_count = 0
+
+    def execute(index, request):
+        nonlocal active, peak, started_count
+        with lock:
+            active += 1
+            started_count += 1
+            peak = max(peak, active)
+        started = time.monotonic()
+        nested = []
+        try:
+            capture = (ctx.chassis.capture_connector_calls() if ctx.chassis is not None
+                       else nullcontext([]))
+            with capture as nested:
+                result = toolbox.call(request.name, **deepcopy(request.args))
+            rec = ToolCall(request.name, request.args, result=result)
+            error = None
+        except BaseException as exc:
+            rec = ToolCall(request.name, request.args, ok=False,
+                           error=f"{type(exc).__name__}: {exc}")
+            error = exc
+        finally:
+            with lock:
+                active -= 1
+        rec.elapsed_ms = int((time.monotonic() - started) * 1000)
+        rec.call_id, rec.batch_id = request.call_id, batch_id
+        completed[index] = (rec, nested, error)
+        return rec, nested, error
+
+    # A submitted batch is an all-settled unit. Even on failure no worker may
+    # outlive reason(), race cleanup or be mistaken for a rolled-back action.
+    submission_error = None
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="react-tool") as pool:
+        futures = []
+        try:
+            for index, request in enumerate(requests):
+                futures.append(pool.submit(execute, index, request))
+        except BaseException as exc:
+            submission_error = exc
+        for future in futures:
+            future.result()
+    # submit() may enqueue work before failing to create another thread. Keep
+    # records for such work even if its Future was never returned to the caller.
+    outcomes = [outcome for outcome in completed if outcome is not None]
+    ctx.tool_batches.append({"batch_id": batch_id, "execution_id": execution_id,
+                             "call_ids": [r.call_id for r in requests], "requested": len(requests),
+                             "started": started_count, "succeeded": sum(rec.ok for rec, _, _ in outcomes),
+                             "failed": sum(not rec.ok for rec, _, _ in outcomes), "peak_in_flight": peak})
+    records = []
+    used_ids = {request.call_id for request in requests}
+    for rec, nested, _ in outcomes:
+        for index, call in enumerate(nested):
+            call.batch_id = batch_id
+            call.call_id = f"{rec.call_id}/connector-{index + 1}"
+            while call.call_id in used_ids:
+                call.call_id += "/nested"
+            used_ids.add(call.call_id)
+        records.extend([*nested, rec])
+        if rec.ok:
+            ctx.facts.setdefault("tool_results", {})[rec.name] = rec.result
+    # Preserve successful siblings on failure, and request order on completion.
+    ctx.tool_calls.extend(records)
+    if ctx.chassis is not None:
+        for rec in records:
+            ctx.chassis.notify_tool_call(rec, task, ctx)
+    errors = [error for _, _, error in outcomes if error is not None]
+    if submission_error is not None:
+        errors.append(submission_error)
+    if errors:
+        for error in errors:
+            if not isinstance(error, Exception):
+                raise error
+        if submission_error is not None:
+            raise BatchToolError("Parallel tool submission failed; all submitted calls settled") from None
+        raise BatchToolError(f"{len(errors)} of {len(requests)} parallel tools failed; all calls settled")
+
+
 # ═══════════════════════════════════════════════════════════
 #  ReAct：边想边做
 # ═══════════════════════════════════════════════════════════
@@ -159,20 +298,84 @@ class ReActPattern(ReasoningPattern):
         decide: Decide,
         max_iterations: int = 8,
         executor_tools: Sequence[str] = (),
+        *,
+        stop_when: Optional[Callable[[Task, RunContext], Optional[str]]] = None,
+        max_parallel_tools: int = 1,
+        max_batch_calls: int = 8,
+        max_tool_calls: int = 64,
+        execution_key: str = "react",
     ) -> None:
+        if not isinstance(execution_key, str) or not execution_key:
+            raise ValueError("execution_key must be a non-empty string")
+        for value in (max_parallel_tools, max_batch_calls, max_tool_calls):
+            if type(value) is not int or value < 1:
+                raise ValueError("Tool execution limits must be positive integers")
         self.decide = decide
         self.max_iterations = max_iterations
         self.executor_tools = list(executor_tools)
+        # 可选的客观停止信号只结束推理；不会替代 Chassis 的最终验收。
+        self.stop_when = stop_when
+        self.max_parallel_tools = max_parallel_tools
+        self.max_batch_calls = max_batch_calls
+        self.max_tool_calls = max_tool_calls
+        self.execution_key = execution_key
+
+    def execution_limits(self):
+        return {"max_iterations": self.max_iterations, "max_parallel_tools": self.max_parallel_tools,
+                "max_batch_calls": self.max_batch_calls, "max_tool_calls": self.max_tool_calls}
+
+    def describe(self) -> str:
+        description = super().describe()
+        return (description + ("；支持客观检查后停止" if self.stop_when is not None else "")
+                + f"；工具并发上限 {self.max_parallel_tools}，每批上限 {self.max_batch_calls}，任务调用上限 {self.max_tool_calls}")
 
     def reason(self, task: Task, ctx: RunContext, toolbox: Any) -> None:
+        try:
+            self._reason(task, ctx, toolbox)
+        except ToolDiagnostic as error:
+            ctx.diagnostics.append(error.as_dict())
+            raise
+
+    def _reason(self, task: Task, ctx: RunContext, toolbox: Any) -> None:
+        execution_id = f"react-{len(ctx.executions) + 1}"
+        safe = getattr(toolbox, "is_parallel_safe", lambda _: False)
+        ctx.executions.append({"execution_id": execution_id, "key": self.execution_key,
+                               "attempt": max(1, ctx.attempt), "limits": self.execution_limits(),
+                               "parallel_safe_tools": [name for name in getattr(toolbox, "names", lambda: [])() if safe(name)]})
         for _ in range(self.max_iterations):
             ctx.iterations += 1
             action, target, kwargs = self.decide(task, ctx, toolbox)
             if action == "stop":
+                ctx.facts["stop_reason"] = "model_stop"
                 ctx.note(f"[ReAct] 模型判断收敛：{target}")
                 return
-            invoke_tool(toolbox, target, kwargs or {}, task, ctx, self.executor_tools)
-        ctx.note(f"[ReAct] 达到迭代上限 {self.max_iterations}，强制收敛")
+            if action not in {"call", "batch"}:
+                raise ValueError(f"未知 ReAct 动作：{action!r}")
+            if action == "batch":
+                if self.max_parallel_tools < 2:
+                    raise ToolDiagnostic("PARALLEL_DISABLED")
+                if kwargs is not None:
+                    raise ToolDiagnostic("INVALID_BATCH")
+                validate_batch(toolbox, target, self.max_batch_calls)
+            count = len(target) if action == "batch" else 1
+            if ctx.tool_actions_started + count > self.max_tool_calls:
+                ctx.facts["stop_reason"] = "tool_call_limit"
+                raise ToolDiagnostic("TOOL_BUDGET_EXHAUSTED")
+            ctx.tool_actions_started += count
+            if action == "batch":
+                _invoke_batch(toolbox, target, task, ctx, self.executor_tools, self.max_parallel_tools, execution_id)
+            else:
+                invoke_tool(toolbox, target, kwargs or {}, task, ctx, self.executor_tools)
+            if self.stop_when is not None:
+                reason = self.stop_when(task, ctx)
+                if reason is not None:
+                    if not isinstance(reason, str) or not reason:
+                        raise ValueError("stop_when 必须返回非空原因字符串或 None")
+                    ctx.facts["stop_reason"] = "objective_stop"
+                    ctx.note(f"[ReAct] 客观检查要求停止推理：{reason}；继续最终验收")
+                    return
+        ctx.facts["stop_reason"] = "iteration_limit"
+        ctx.note(f"[ReAct] 达到迭代上限 {self.max_iterations}；是否成功仍由完成判据决定")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -311,23 +514,22 @@ class ReWOOPattern(ReasoningPattern):
 
 
 # ═══════════════════════════════════════════════════════════
-#  LLMCompiler：DAG 规划 + 波次并行 + Joiner
+#  LLMCompiler：DAG 规划 + 依赖分波 + Joiner
 # ═══════════════════════════════════════════════════════════
 
 @reasoning_registry.register("llm_compiler")
 class LLMCompilerPattern(ReasoningPattern):
-    """把任务编译成一张带依赖的 DAG，无依赖的节点并行成波次执行。
+    """把任务编译成一张带依赖的 DAG，无依赖的节点分到同一波次。
 
     与 ReWOO 的关键差别：ReWOO 的计划是**线性**的，第 3 步必须等第 2 步；
-    这里只要没有显式依赖就可以同波执行。串行长度从步数降到 DAG 深度，
-    这在工具调用有真实延迟时是数量级的差别。
+    这里显式表示依赖和可并行集合，但本实现仍逐个调用同波节点。
 
-    执行完一轮后由 Joiner 判断收工还是重新编译。演示实现里波次是顺序跑的，
-    因为底盘是同步的；`ctx.facts["waves"]` 记录了真正的并行结构。
+    执行完一轮后由 Joiner 判断收工还是重新编译。`ctx.facts["waves"]`
+    记录的是规划结构，不是并发执行证据，也不证明实际耗时减少。
     """
 
     name = "LLMCompiler"
-    description = "规划成带依赖的 DAG，无依赖节点并行成波次，Joiner 决定收工或重编译"
+    description = "规划成带依赖的 DAG，按波次串行执行，Joiner 决定收工或重编译"
 
     def __init__(
         self,
@@ -365,7 +567,7 @@ class LLMCompilerPattern(ReasoningPattern):
             ctx.facts["waves"] = [[n.id for n in w] for w in waves]
             ctx.note(
                 f"[LLMCompiler] {len(nodes)} 个节点编译成 {len(waves)} 波"
-                f"（串行长度 {len(waves)}，非 {len(nodes)}）"
+                f"（当前实际执行仍串行：{len(nodes)} 个节点）"
             )
 
             evidence: Dict[str, Any] = {}
@@ -503,6 +705,8 @@ __all__ = [
     "PlanNode",
     "Planner",
     "ReActPattern",
+    "ToolRequest",
+    "BatchToolError",
     "ReWOOPattern",
     "Reflector",
     "ReflexionPattern",

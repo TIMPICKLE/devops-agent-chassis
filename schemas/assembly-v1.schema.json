@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent Chassis assembly manifest v1 (descriptive, not executable)",
+  "type": "object",
+  "required": ["schema_version", "content_id", "assembly", "runtime"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "agent-chassis.assembly/v1"},
+    "content_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "assembly": {
+      "type": "object",
+      "required": ["name", "orchestrator", "reasoning", "delegation_points", "connectors", "injection_timeline", "boundaries", "task_source", "done_criteria", "failure_policy"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "orchestrator": {"type": "string"},
+        "reasoning": {"type": "string"},
+        "delegation_points": {"type": "array", "items": {"type": "string"}},
+        "connectors": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+        "injection_timeline": {
+          "type": "array",
+          "items": {
+            "type": "array", "minItems": 2, "maxItems": 2,
+            "prefixItems": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]
+          }
+        },
+        "boundaries": {"type": "array", "items": {"type": "string"}},
+        "task_source": {"type": "string"},
+        "done_criteria": {"type": "string"},
+        "failure_policy": {"type": "string"}
+      }
+    },
+    "runtime": {"type": "object", "description": "Caller-owned metadata; credential references only, no secret values."}
+  }
+}

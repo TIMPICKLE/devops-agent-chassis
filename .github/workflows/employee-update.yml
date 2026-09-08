@@ -1,0 +1,100 @@
+name: Employee Update · Preserve Edits and Verify Changed Behavior
+
+on:
+  push:
+    branches: ["feat/roadmap-**"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      live:
+        description: "Generate once, update knowledge without regeneration, verify four real tasks"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: employee-update-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e ".[dev,llm]"
+      - name: Regression including preserved edits, conflicts and real compiler policy checks
+        run: python -m pytest tests/ -q
+
+  live-update:
+    needs: contracts
+    if: >-
+      github.repository == 'TIMPICKLE/devops-agent-chassis' &&
+      ((github.event_name == 'workflow_dispatch' && inputs.live) ||
+       (github.event_name == 'push' && contains(github.event.head_commit.message, '[employee-update-live]')))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      BIGMODEL_API_KEY: ${{ secrets.BIGMODEL_API_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e ".[llm]"
+      - name: Prepare explicit old and new requirements
+        run: python tools/employee_update_demo.py prepare-requests --output-dir reports/employee-update
+      - name: Generate baseline employee with real model
+        run: >-
+          python tools/assemble_employee.py --request-dir reports/employee-update/requests/v1
+          --output-dir reports/employee-update/base --max-calls 3 --max-tokens 16384 --timeout 240
+      - name: Simulate team customization of generated code and runbook
+        run: python tools/employee_update_demo.py prepare-working --output-dir reports/employee-update
+      - name: Preview changed knowledge, affected nodes and preserved edits (zero model calls)
+        run: >-
+          python tools/update_employee.py --project reports/employee-update/base
+          --working-copy reports/employee-update/working --request-dir reports/employee-update/requests/v2
+          --plan reports/employee-update/plan.json --require-live
+      - name: Create new version without regenerating employee code
+        run: >-
+          python tools/update_employee.py --project reports/employee-update/base
+          --working-copy reports/employee-update/working --request-dir reports/employee-update/requests/v2
+          --plan reports/employee-update/plan.json --apply --output-dir reports/employee-update/updated --require-live
+      - name: Run old and new policies on the same input, plus two regression tasks
+        shell: bash
+        run: |
+          status=0
+          python tools/run_generated_employee.py --project reports/employee-update/base --repo tests/employee_projects/billing --unit app/billing.cpp --output-dir reports/employee-update/old-billing --max-calls 6 --max-tokens 4096 --timeout 120 || status=1
+          python tools/run_generated_employee.py --project reports/employee-update/updated --repo tests/employee_projects/billing --unit app/billing.cpp --output-dir reports/employee-update/new-billing --max-calls 6 --max-tokens 4096 --timeout 120 || status=1
+          python tools/run_generated_employee.py --project reports/employee-update/updated --repo tests/employee_projects/pricing --unit src/main.cpp --output-dir reports/employee-update/regression-pricing --max-calls 6 --max-tokens 4096 --timeout 120 || status=1
+          python tools/run_generated_employee.py --project reports/employee-update/updated --repo tests/employee_projects/scheduler --unit app/worker.cpp --output-dir reports/employee-update/regression-scheduler --max-calls 6 --max-tokens 4096 --timeout 120 || status=1
+          exit "$status"
+      - name: Independently verify behavior change, preserved edits and previous tasks
+        if: always()
+        run: python tools/employee_update_demo.py verify --output-dir reports/employee-update
+      - name: Publish overview or explicit failure
+        if: always()
+        run: |
+          if [[ -f reports/employee-update/summary.md ]]; then
+            cat reports/employee-update/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Update chain did not fully pass. Inspect failed steps and preserved evidence." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload baseline, working copy, revision lineage, patches and verification
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: employee-update-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/employee-update/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,96 @@
+name: Employee Project · Requirements to Verified Runtime
+
+on:
+  push:
+    branches: ["feat/roadmap-**"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      live:
+        description: "Generate one project with a real model, then run it on two source workspaces"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: employee-project-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  contracts:
+    name: Employee project contracts and regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e ".[dev,llm]"
+      - name: Verify generation, real compiler checks and existing contracts
+        run: python -m pytest tests/ -q
+
+  live-project:
+    needs: contracts
+    if: >-
+      github.repository == 'TIMPICKLE/devops-agent-chassis' &&
+      ((github.event_name == 'workflow_dispatch' && inputs.live) ||
+       (github.event_name == 'push' && contains(github.event.head_commit.message, '[employee-live]')))
+    name: Generate once · run two workspaces · independent acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      BIGMODEL_API_KEY: ${{ secrets.BIGMODEL_API_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e ".[llm]"
+      - name: Generate employee code from requirements (real model, at most 3 calls)
+        run: >-
+          python tools/assemble_employee.py --request-dir employee_requests/build_repair
+          --output-dir reports/employee-project/project --max-calls 3 --max-tokens 16384 --timeout 240
+      - name: Verify generation provenance before importing generated code
+        run: python tools/verify_employee_project.py --project reports/employee-project/project --require-live
+      - name: Run generated employee on pricing sources (new process, real model)
+        run: >-
+          python tools/run_generated_employee.py --project reports/employee-project/project
+          --repo tests/employee_projects/pricing --unit src/main.cpp
+          --output-dir reports/employee-project/pricing --max-calls 6 --timeout 90
+      - name: Reuse the same generated employee on scheduler sources
+        if: ${{ !cancelled() }}
+        run: >-
+          python tools/run_generated_employee.py --project reports/employee-project/project
+          --repo tests/employee_projects/scheduler --unit app/worker.cpp
+          --output-dir reports/employee-project/scheduler --max-calls 6 --timeout 90
+      - name: Independently recompile both artifacts and verify both model phases
+        if: always()
+        run: >-
+          python tools/verify_employee_project.py --project reports/employee-project/project
+          --report reports/employee-project/pricing --report reports/employee-project/scheduler
+          --require-live --summary-dir reports/employee-project
+      - name: Publish overview and explicit failure notes
+        if: always()
+        run: |
+          if [[ -f reports/employee-project/summary.md ]]; then
+            cat reports/employee-project/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Project chain did not fully pass; inspect generation/runtime steps and preserved artifacts." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload generated project, source snapshots, patches and acceptance
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: employee-project-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/employee-project/
+          if-no-files-found: warn
+          retention-days: 14

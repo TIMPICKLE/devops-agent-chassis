@@ -1,0 +1,7 @@
+{
+  "name": "cpp-build-repair-employee",
+  "brief": "帮我搭建一个构建失败修复员工。用户给出本地源码项目目录和一个 C++ 编译单元。先读取真实编译错误和源码，再参考项目规范寻找正确头文件引用，修复后重新编译。只能修改 include 指令，其他代码和原项目保持不变，交付候选文件、patch 和验收报告。缺少材料时告诉我缺什么，不能假装完成。节点和知识绑定需要能解释。",
+  "task_interface": "local_cpp_translation_unit",
+  "done_criteria": "compiler_and_include_only",
+  "knowledge": ["knowledge/include_rules.md"]
+}

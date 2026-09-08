@@ -11,7 +11,7 @@ description: Use when 用户要基于本仓库（agent-chassis 工程底盘）�
 你（agent）的工作是：**逐组访谈用户 → 生成载荷与装配脚本 → 实际运行验证**。
 
 不要把装配做成固定模板填空：和用户来回商量，装出任意合法形态——包括
-SubgraphOrchestrator 多支路分流、LLMCompiler DAG 并行、按支路挂不同推理模式、
+SubgraphOrchestrator 多支路分流、LLMCompiler DAG 依赖分波、按支路挂不同推理模式、
 人工介入点等需要根据业务量身设计的结构。
 
 **生产装配默认必须完成真实 LLM Provider / 外部 Coding Agent 接入。** 只有用户明确选择
@@ -22,7 +22,9 @@ Demo/mock 时，才保留规则模拟 decider/planner；不要把规则模拟描
 | 文件 | 什么时候读 |
 |---|---|
 | [src/agent_chassis/contracts.py](../../../src/agent_chassis/contracts.py) | 开工前必读，唯一必须读懂的文件：全部抽象与 InjectionPoint 枚举 |
-| [src/agent_chassis/reasoning.py](../../../src/agent_chassis/reasoning.py) | 接真实 LLM / 外部 Agent 前读：确认 decider/planner/solver/critic 的当前签名 |
+| [src/agent_chassis/orchestration/reasoning.py](../../../src/agent_chassis/orchestration/reasoning.py) | 接真实 LLM / 外部 Agent 前读：确认 decider/planner/solver/critic 的当前签名 |
+| [adapters/runtime.py](../../../adapters/runtime.py) | 使用参考模型适配器时读：`react_pattern()` 统一装配入口及配置校验 |
+| [装配、验收与证据配方](references/runtime-assembly.md) | 生成 ReAct 装配或排查运行失败时读：统一配置、工具/HTTP 诊断、独立验收与证据接线 |
 | [payloads/code_quality.py](../../../payloads/code_quality.py) | 生成新载荷前读：TaskSource/DoneCriteria/ToolBox/decider/planner/critic 的范本 |
 | [examples/04_swap_payload.py](../../../examples/04_swap_payload.py) | 生成装配脚本前读：Chassis 链式接线 + 双载荷对照的范本 |
 | [examples/01_swap_orchestration.py](../../../examples/01_swap_orchestration.py) | 用户要 subgraph / llm_compiler / basic_reflection 时读：全部编排组合的构造配方 |
@@ -62,7 +64,7 @@ Demo/mock 时，才保留规则模拟 decider/planner；不要把规则模拟描
 
 | 形态 | 选它当 | 构造 |
 |---|---|---|
-| `NestedOrchestrator` | 默认推荐：确定性骨架 + 单一下放点 | `NestedOrchestrator(steps, box, pattern, delegate_at="agent_work", criteria)` |
+| `NestedOrchestrator` | 默认推荐：确定性骨架 + 单一下放点 | `NestedOrchestrator(steps, box, pattern, delegate_at="agent_work", criteria=criteria)` |
 | `StateMachineOrchestrator` | 线性阶段，下放点是某个 AgentStep | `StateMachineOrchestrator(steps, criteria)`，AgentStep 传 `pattern=` 和 `toolbox=` |
 | `SingleAgentOrchestrator` | 开放式求解，无需确定性阶段把守 | `SingleAgentOrchestrator(box, pattern, criteria)` |
 | `SubgraphOrchestrator` | 按类型分流、支路挂不同模式、要人工介入 | 见下方配方 |
@@ -74,8 +76,8 @@ Demo/mock 时，才保留规则模拟 decider/planner；不要把规则模拟描
 | `ReActPattern(decide, max_iterations, executor_tools)` | decider 函数 | 上下文不完整，边取证边调整 |
 | `PlanExecutePattern(planner, executor_tools)` | planner 函数 | 计划需可审查，失败要重规划 |
 | `PlanAndSolvePattern(planner, executor_tools)` | planner 函数 | 一次调用出计划即答案，最省事 |
-| `ReWOOPattern(planner, solver=None, executor_tools)` | planner（kwargs 可写 `"#E1"` 引用前步结果） | token 最省，固定两次模型调用 |
-| `LLMCompilerPattern(dag_planner, joiner, executor_tools)` | DagPlanner 返回 `List[PlanNode]`（带 deps） | 工具调用有真实延迟，无依赖步骤要并行 |
+| `ReWOOPattern(planner, solver=None, executor_tools=())` | planner（kwargs 可写 `"#E1"` 引用前步结果） | 计划后执行工具，再可选汇总；实际模型调用数取决于接入的 callable |
+| `LLMCompilerPattern(dag_planner, joiner, executor_tools)` | DagPlanner 返回 `List[PlanNode]`（带 deps） | 有明确依赖的任务；当前波内串行，不承诺并行 DAG 执行 |
 | `BasicReflectionPattern(inner, reflector, rounds)` | reflector（只看模型自述） | 修表达和完整性，修不了"事实上没做对" |
 | `ReflexionPattern(inner, critic, max_attempts)` | critic（**只读客观事实**） | 要发现"模型以为做完了其实没做" |
 
@@ -112,6 +114,7 @@ SubgraphOrchestrator(
 `ON_RETRY`（回灌上次失败原因）｜`BEFORE_VERDICT`（补充判定口径）｜
 `AGENT_BOOT`（刻意留空，慎用）。
 注意：`executor_tools` 列表决定哪些工具触发 BEFORE_EXECUTOR 而非 BEFORE_TOOL，忘配则 Skill 注不进去。
+参考 `RuntimeDecider` 还会在每次模型请求前触发 BEFORE_EXECUTOR；不要因此误判实际工具是否消费了知识。
 
 ### MCP Connector onboarding
 
@@ -184,10 +187,9 @@ HTTP 示例形态：
 
 1. 离线检查 scheme 与字段能被当前 Connector 构造函数接受；
 2. 检查 Secret 已全部改成引用，`.env.example` 无真实凭据；
-3. Runtime Adapter 已实现且网络/进程条件允许时，执行 discovery / `inventory()`，确认能列出工具；
+3. 当前 stdio / Streamable HTTP transport 已实现，需安装可选 MCP v2 依赖（Python 3.10+）；环境允许时执行 discovery / `inventory()`，确认能列出工具；
 4. 再选一个只读/无副作用工具做最小 smoke test；
-5. 若当前 `mcp.stdio` / `mcp.http` Runtime 仍抛 `NotImplementedError`，明确报告
-   “配置已生成，但 MCP transport 尚未实现，未完成 live 验证”，**不得声称已连接成功**；
+5. 缺少依赖、网络或启动失败时报告实际失败阶段，不把环境问题推断成 transport 未实现。配置生成、发现成功、调用成功分开报告；当前同一 MCP Connector 内部串行排队，ReAct 并发不能证明远端并行；
 6. 除非用户明确要求实现 MCP transport，否则 onboarding 任务不要顺手修改 Chassis Core。
 
 ### LLM Provider / 推理适配器
@@ -216,7 +218,7 @@ calling。禁止要求用户把真实 Token/API Key 粘到待提交源码里。
 
 #### 生成 Adapter
 
-根据 `src/agent_chassis/reasoning.py` 当前签名，把 Provider 适配到所选 Pattern 的
+根据 `src/agent_chassis/orchestration/reasoning.py` 当前签名，把 Provider 适配到所选 Pattern 的
 `decide` / `planner` / `solver` / `joiner` / `critic`。不要假设签名永远不变。
 
 支持 native tool/function calling 时：
@@ -224,12 +226,14 @@ calling。禁止要求用户把真实 Token/API Key 粘到待提交源码里。
 1. 从 `box.schema()` 生成 Provider 的 tool schema；
 2. **只暴露当前 PermissionBoundary 已授权的工具**；
 3. 将当前 `ctx.facts` + 本轮注入知识作为模型上下文；
-4. 把模型结构化结果解析成底盘动作（概念上是 `("call", tool, args)` 或
-   `("stop", reason, None)`，以仓库当前类型为准）；
+4. 把模型结构化结果解析成 `call` / `stop`，或启用后的 `("batch", [ToolRequest, ...], None)`；
 5. 执行前再次校验工具名和参数 schema，未知工具/非法参数直接拒绝，不做猜测执行。
 
-Provider 不支持 native tool calling 时，使用严格 structured-output schema + parser 兜底；
-解析失败应作为可观测失败进入重试/终止流程，不允许从自由文本猜工具参数。
+参考 `OpenAIChatDecider` / `AnthropicDecider` 依赖对应协议的原生工具调用，默认非流式；服务要求 SSE 时设置 `ModelConfig(stream=True)` 或 CLI `--stream`，完整响应重组并通过预检后才执行工具。用量选项与中断处理见 [运行接线配方](references/runtime-assembly.md)。
+Provider 不支持时，需另行实现严格 structured-output schema + parser 适配器；仓库没有自动兜底。
+先按目标 Endpoint 做无副作用 smoke test，不把某个网关配置的结果泛化为整个模型的能力。
+解析失败进入可观测失败，不从自由文本猜参数。执行配置用 `react_pattern(config, decider, toolbox=box, ...)`
+统一接线；手工构造 ReAct 时显式调用 `validate_react_alignment()`。具体并行和证据配方见上面的参考文档。
 
 #### 外部 Coding Agent 模式
 
@@ -278,9 +282,11 @@ Provider 不支持 native tool calling 时，使用严格 structured-output sche
 
 - MCP 配置字段与当前 Connector 构造签名一致，所有 Secret 都已引用化；
 - reasoning callable 与当前 Pattern 签名匹配；
+- 模型侧与执行器配置通过 T01 校验；并行读取工具经过路径范围和线程安全检查后才声明 `parallel_safe=True`，共享候选写入保持单调用；
 - `box.schema()` 能正确转成 Provider tools / structured-output schema；
 - 未授权工具不会暴露给模型；
 - parser 会拒绝未知工具和非法参数；
+- T02 诊断应区分失败原因、保留调用序号，不回显参数值或未知工具名；
 - 配置里没有真实 Secret，`.env.example` 只有占位值。
 
 有可用网络和凭据时，生产模式再做最小 live smoke test：
@@ -300,6 +306,13 @@ python -m pytest tests/ -q    # 预期：全部通过（确认没改坏底盘）
 
 装配报告里检查三件事：决策下放点是不是只有商量好的那一个；
 injection timeline 的 agent_boot 行是否为空；权限边界拒绝清单是否符合预期。
+
+另外核对最终生效的执行限制；启用并行后用实际独立批次验证接线，只有在途峰值大于 1 才能声称观察到并发。
+默认单调用装配不要求为了验收强行开启并行。测试替身的批次仅证明本地调度，不能当作 live 或远端并发证据。
+`repo.read` 不等于项目目录隔离，路径需解析后检查根目录归属（含符号链接），读取失败不能伪装成源码。
+编排器已自动记录阶段名，普通回调不要重复 `ctx.record_step()`。
+“生成候选”不等于“业务验证通过”或“已交付”：与用户约定独立验证项，用实际结果及证据引用记录；
+检查未执行时明确标为 `not_run`，不能用 `compile_check` 等步骤名代替执行证据。生产证据检查不替代业务验收。
 
 生产模式最终还要报告：实际选用的 Provider/Model（不含 Secret）、Adapter 路径、
 是否通过 live smoke test；Demo/mock 模式要明确标注不是生产 LLM 集成。

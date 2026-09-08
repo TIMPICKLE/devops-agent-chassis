@@ -129,7 +129,11 @@ def test_real_stdio_server_discovery_calls_env_cwd_errors_and_reuses_session(tmp
         connector.close()
 
 
-def test_real_streamable_http_server_discovery_call_and_headers(tmp_path: Path):
+def test_real_streamable_http_server_discovery_call_and_headers(tmp_path: Path, monkeypatch):
+    # 此测试只连接自己创建的 loopback server；不要继承宿主出网代理。
+    # monkeypatch 在测试结束后恢复，不改变真实 Connector 的代理政策。
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
     server = tmp_path / "http_server.py"
     _write_http_server(server)
     port = _free_port()
