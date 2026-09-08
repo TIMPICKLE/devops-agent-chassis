@@ -182,7 +182,12 @@ def validate_react_alignment(config: ModelConfig, pattern: Any, toolbox: Any = N
             hints.append(
                 f"Parallel execution is enabled (max_parallel_tools="
                 f"{config.max_parallel_tools}) but no tool declares "
-                "parallel_safe=True; every action will stay single-call"
+                "parallel_safe=True. Single calls remain allowed, but batches "
+                "will be rejected before any tool executes; there is no automatic "
+                "fallback to serial execution or selection of the first call. "
+                "Use max_parallel_tools=1 for a single-call contract, or declare "
+                "parallel_safe=True only for tools verified safe for independent "
+                "concurrent execution. A single-call contract still rejects batches."
             )
     return hints
 

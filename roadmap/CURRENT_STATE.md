@@ -2,6 +2,8 @@
 
 更新：2026-09-08。分支：`feat/roadmap-showcase-v1`。本页汇总第五阶段及后续底盘维护状态；早期缺陷复现保留在[历史审计基线](AUDIT_BASELINE_V2.md)，不作为当前缺陷清单。
 
+最新实测复核：[V5 归属与修复](../changelog/server-v5-review-2026-09-08.md)。无安全工具的装配告警现明确说明单调用仍允许、批次整批拒绝，不暗示自动降级；[模型接入说明](../docs/MODEL_COMPATIBILITY.md)补充流式能力限制、超时排查及业务验收边界。
+
 ## 已验证什么
 
 | 能力 | 当前实现与限制 | 证据 |
@@ -15,7 +17,7 @@
 | 规范更新并保留定制 | 只更新既有知识文件内容；预览影响、检测冲突、保留工作副本中的代码和自定义文件，创建新版本 | [第五阶段真实链路](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34033606604)：更新 0 次模型调用，新旧规范改变同一输入的选择，两个旧任务通过 |
 | 知识注入与消费 | 显式事件、任务/阶段匹配、版本和消费回执；不是通用语义路由或自动理解文档 | [第三阶段](../changelog/stage-03.md)、[第五阶段](../changelog/stage-05.md)；第三阶段整体 live 门禁仍为失败，不改写历史 |
 | 运行期模型适配 | Anthropic / OpenAI 兼容接口的受限工具调用子集；第二阶段访问同一 GLM 服务 | [第二阶段](../changelog/stage-02.md)；不是跨模型厂商效果比较 |
-| 底盘合同与回归 | 权威判据、失败清理、上下文、项目生命周期及 T1–T5 回归；核心基础安装无必需第三方依赖 | [T5 受测版本 15b689a](../changelog/task-05-http-diagnostics.md)：本地 350 passed；[Python 3.9 / 3.13 CI](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34174349224) 均通过；第五阶段 195 项属历史口径 |
+| 底盘合同与回归 | 权威判据、失败清理、上下文、项目生命周期、T1–T5 与 V5 告警行为回归；核心基础安装无必需第三方依赖 | [V5 修复验证](../changelog/server-v5-review-2026-09-08.md)：本地 352 passed；前序 [T5 受测版本 15b689a](../changelog/task-05-http-diagnostics.md) 为 350 passed，第五阶段 195 项属历史口径 |
 
 第四阶段受测源码为 `34f49a23daba64d50e97588e90a0d4a47dfce655`；第五阶段为 `68a5a9c1b0be8b54e0b46d138974c229f9cdf545`。后续文档提交不扩大对应 live 验证范围。报告下载入口在各阶段记录中，Actions 产物保留 14 天。
 

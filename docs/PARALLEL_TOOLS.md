@@ -59,6 +59,9 @@ pattern = react_pattern(config, decider, toolbox=toolbox)
 
 `react_pattern` 在构造时调用 `validate_react_alignment`：模型侧与执行器的 `max_parallel_tools` / `max_batch_calls` / `max_tool_calls` 不一致会立即报错，指出字段、两侧值和修正方式，而不是等到模型真的返回多个调用才在运行中失败；开启并行但没有任何工具声明 `parallel_safe=True` 时给出提示（不阻止运行）。手工装配仍可写 `ReActPattern(decider, **config.react_options())`，此时应自行调用 `adapters.runtime.validate_react_alignment(config, pattern, toolbox)` 做同样检查。自定义 decider（非模型适配器）继续可用，核心包不依赖适配器。
 
+**“提示后允许装配”只表示合法的单调用仍可执行，不表示自动降级。** 若模型返回包含未声明安全工具的批次，整批在执行前以 `TOOL_NOT_PARALLEL_SAFE` 拒绝；不会仅取第一个调用，也不会偷偷改为串行。装配提示现在明确说明这一点。
+若项目只需单调用，配置 `max_parallel_tools=1` 以声明单调用合同（返回批次仍会被拒绝）；若需要并行，先核对工具独立性和线程安全，再声明 `parallel_safe=True`。不能仅为消除告警就给写候选工具添加安全声明。
+
 以上示例接入装配方提供的 `toolbox`、`boundary` 和不可变快照。参考适配器依赖仓库检出及 `.[llm]` 可选依赖；底盘核心仍零第三方依赖。Anthropic 使用 `AnthropicDecider`，省略 OpenAI 专用字段即可，并发能力由 `max_parallel_tools` 决定。
 
 对于明确拒绝该 OpenAI 参数的网关，可追加 `--openai-omit-parallel-tool-calls`，或将 `openai_parallel_tool_calls=None`。省略参数不会放宽本地限制，也不触发自动重试。旧配置 `False` 继续请求单调用；无论哪种写法，`react_pattern` / `validate_react_alignment` 都会在装配期核对协议配置与执行器上限是否一致。

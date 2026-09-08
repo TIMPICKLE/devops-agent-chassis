@@ -10,6 +10,8 @@
 
 T1–T5 使用入口：[统一装配与工具诊断](docs/PARALLEL_TOOLS.md) · [装配/验收可运行示例](examples/07_verified_assembly.py) · [生产格式证据（显式开启）](docs/PRODUCTION_EVIDENCE.md) · [HTTP 错误诊断](docs/HTTP_DIAGNOSTICS.md)。逐项代码与文档对应关系见[文档同步复核](changelog/docs-sync-t01-t05.md)。
 
+服务器实测排错：[模型接入边界](docs/MODEL_COMPATIBILITY.md)。无安全工具的并行告警已明确为“单调用可用，批次整批拒绝”，不承诺自动降级；本次归属分析和修复见 [V5 实测复核](changelog/server-v5-review-2026-09-08.md)。
+
 🚗 一台数字员工 = 底盘（与业务无关的五大系统）+ 载荷（与业务有关的两项定义）。
 
 底盘回答的是任何 DevOps 数字员工都要回答的同一组问题：它可不可靠、怎么接外部系统、

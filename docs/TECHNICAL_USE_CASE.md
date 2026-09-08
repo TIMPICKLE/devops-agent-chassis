@@ -220,6 +220,8 @@ flowchart TD
 `verify_employee_project.py` 则重放本例的编译及差异验收，两者不能互相替代。
 完整字段和接线见[并行与工具诊断](PARALLEL_TOOLS.md)、[生产格式证据](PRODUCTION_EVIDENCE.md)、[HTTP 诊断](HTTP_DIAGNOSTICS.md)。
 
+服务器排错还需区分能力边界与代码缺陷：当前直接 API 适配器只解析非流式 JSON；没有安全工具的装配提示不承诺自动降级；超时也不能直接归因于推理 token。核对方法及“有 diff 不等于业务修复成功”的验收边界见[模型接入与实测排错](MODEL_COMPATIBILITY.md)。
+
 ### 现场遇到失败，怎样读报告？
 
 下面是**合成情形的字段示意**，不是新增实机结果。字段从单次运行对象读取，例如 `runtime.evidence.json` 的 `runs[0]`；装配期失败可能尚未产生运行证据。

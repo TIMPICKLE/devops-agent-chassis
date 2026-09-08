@@ -3,7 +3,8 @@ import warnings
 
 import pytest
 
-from adapters.runtime import ModelConfig, react_pattern, validate_react_alignment
+from adapters.runtime import ModelConfig, ModelError, react_pattern, validate_react_alignment
+from agent_chassis.diagnostics import ToolDiagnostic
 from agent_chassis.contracts import RunContext, Task
 from agent_chassis.orchestration import ReActPattern, ToolBox, ToolRequest
 
@@ -70,12 +71,63 @@ def test_entry_refuses_overrides_that_conflict_with_config():
 
 
 def test_parallel_without_parallel_safe_tools_warns_but_single_tool_assembly_runs():
-    box = ToolBox().add("read", lambda value: value)
+    calls = []
+    box = ToolBox().add("read", lambda value: calls.append(value) or value)
+
+    def single_call(task, ctx, box):
+        return ("stop", "done", None) if ctx.tool_calls else ("call", "read", {"value": 7})
+
     with pytest.warns(UserWarning, match="parallel_safe=True"):
-        pattern = react_pattern(config(max_parallel_tools=2), stopping_decider(), toolbox=box)
+        pattern = react_pattern(config(max_parallel_tools=2), single_call, toolbox=box)
     ctx = RunContext()
     pattern.reason(Task("t", "test"), ctx, box)
     assert ctx.facts["stop_reason"] == "model_stop"
+    assert calls == [7] and ctx.tool_calls[0].result == 7
+
+
+@pytest.mark.parametrize("adapter", [False, True], ids=["custom-decider", "openai-adapter"])
+def test_warned_assembly_rejects_batches_without_dropping_or_serializing_calls(adapter, monkeypatch):
+    calls = []
+    schema = {"type": "object", "properties": {"value": {"type": "integer"}},
+              "required": ["value"], "additionalProperties": False}
+    box = ToolBox().add("read", lambda value: calls.append(value), input_schema=schema)
+    cfg = config(max_parallel_tools=2)
+    requests = [ToolRequest("a", "read", {"value": 1}), ToolRequest("b", "read", {"value": 2})]
+    decider = batch_once_decider(requests)
+    if adapter:
+        pytest.importorskip("jsonschema")
+        import json
+        from adapters.openai_runtime import OpenAIChatDecider
+
+        monkeypatch.setenv("TEST_KEY", "synthetic-not-a-credential")
+
+        def transport(url, headers, body, timeout):
+            return {"choices": [{"finish_reason": "tool_calls", "message": {
+                "role": "assistant", "tool_calls": [
+                    {"id": r.call_id, "type": "function", "function": {
+                        "name": r.name, "arguments": json.dumps(r.args)}} for r in requests]}}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 6}}
+
+        decider = OpenAIChatDecider(cfg, tool_names=["read"], transport=transport)
+    with pytest.warns(UserWarning, match="batches will be rejected before any tool executes") as warning:
+        pattern = react_pattern(cfg, decider, toolbox=box)
+    message = str(warning[0].message)
+    assert "no automatic fallback" in message
+    assert "only for tools verified safe" in message
+    assert "single-call contract still rejects batches" in message
+    ctx = RunContext()
+    with pytest.raises(ModelError if adapter else ToolDiagnostic) as error:
+        pattern.reason(Task("t", "test"), ctx, box)
+    diagnostic = error.value.diagnostic if adapter else error.value
+    assert diagnostic.code == "TOOL_NOT_PARALLEL_SAFE"
+    assert diagnostic.details["action_index"] == 1
+    assert calls == [] and ctx.tool_calls == [] and ctx.tool_actions_started == 0
+    if adapter:
+        assert len(ctx.model_calls) == 1
+        record = ctx.model_calls[0]
+        assert record["ok"] is False
+        assert (record["input_tokens"], record["output_tokens"]) == (12, 6)
+        assert record["diagnostic"]["code"] == "TOOL_NOT_PARALLEL_SAFE"
 
 
 def test_single_parallel_safe_tool_batches_without_warning():
