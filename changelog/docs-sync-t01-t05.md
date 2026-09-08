@@ -39,3 +39,13 @@ T1 的 Windows LF 修复已在 T02–T04 中保留，并改用兼容 Python 3.9 
 
 T5 受测代码已有 **350 passed** 和三条成功 CI，见[原验证链接](task-05-http-diagnostics.md)。
 本次不修改测试以匹配文案、不重写企业脚本、不自动开启 T4 严格模式，也不实施 T6。
+
+## 远端验证
+
+文档受测提交：[a58f05e12d51e698f57797612bcac457269ffba5](https://github.com/TIMPICKLE/devops-agent-chassis/commit/a58f05e12d51e698f57797612bcac457269ffba5)。三条 CI 均通过：
+
+- [Roadmap 合同与可移植证据](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34177188604)。
+- [Employee Project](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34177188582)。
+- [Employee Update](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34177188602)。
+
+后续提交仅补录上述链接，不扩大验证范围；没有触发付费 live 任务。
