@@ -9,6 +9,17 @@
     "runs": {"type": "array", "items": {"$ref": "#/$defs/run"}}
   },
   "$defs": {
+    "provider_error_code": {"enum": ["invalid_request_error", "authentication_error", "permission_error", "rate_limit_error", "insufficient_quota", "model_not_found", "context_length_exceeded", "unsupported_parameter", "invalid_api_key", "overloaded_error", "api_error", "server_error", "not_found_error", "request_too_large"]},
+    "http_error": {
+      "type": "object", "required": ["status", "category"], "additionalProperties": false,
+      "properties": {
+        "status": {"type": "integer", "minimum": 100, "maximum": 999},
+        "category": {"enum": ["invalid_request", "authentication", "permission", "not_found", "request_timeout", "request_too_large", "rate_limit", "server_error", "http_error"]},
+        "provider_code": {"$ref": "#/$defs/provider_error_code"}, "provider_type": {"$ref": "#/$defs/provider_error_code"},
+        "request_id_sha256": {"$ref": "#/$defs/hash"},
+        "retry_after_seconds": {"type": "integer", "minimum": 0, "maximum": 999999999}
+      }
+    },
     "positive": {"type": "integer", "minimum": 1},
     "source": {
       "type": "object", "required": ["commit", "dirty"], "additionalProperties": false,
@@ -86,6 +97,7 @@
         "mode": {"enum": ["live", "test-transport"]}, "ok": {"type": "boolean"},
         "elapsed_ms": {"$ref": "#/$defs/count"}, "request_id": {"type": "string"}, "error_type": {"type": "string"},
         "diagnostic": {"$ref": "#/$defs/diagnostic"},
+        "http_error": {"$ref": "#/$defs/http_error"},
         "input_tokens": {"$ref": "#/$defs/tokens"}, "output_tokens": {"$ref": "#/$defs/tokens"}
       }
     },

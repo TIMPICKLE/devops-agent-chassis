@@ -55,6 +55,8 @@ def verify_documents(manifest, evidence, *, require_live=False, require_producti
             if not set(receipt["included"] + receipt["omitted"]).issubset(known):
                 raise ValueError("Context receipt refers to an unrecorded injection")
         calls = run["model_calls"]
+        if any(call["ok"] and "http_error" in call for call in calls):
+            raise ValueError("Successful model call contains an HTTP failure")
         if run["mode"] == "offline-contract" and calls:
             raise ValueError("Offline fixture evidence contains model calls")
         complete = bool(calls) and all(type(c[key]) is int for c in calls for key in ("input_tokens", "output_tokens"))

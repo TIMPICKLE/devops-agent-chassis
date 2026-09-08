@@ -11,11 +11,13 @@ import os
 import time
 import warnings
 from dataclasses import dataclass
+from http.client import HTTPException
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from adapters.http_diagnostics import http_diagnostic
 from agent_chassis.contracts import InjectionPoint, RunContext, Task
 from agent_chassis.diagnostics import ToolDiagnostic
 from agent_chassis.orchestration.reasoning import ReActPattern, ToolRequest, validate_batch
@@ -43,9 +45,10 @@ DEFAULT_ENDPOINTS = {
 class ModelError(RuntimeError):
     """Sanitized model transport/protocol failure."""
 
-    def __init__(self, message, *, diagnostic=None):
+    def __init__(self, message, *, diagnostic=None, http_error=None):
         super().__init__(message)
         self.diagnostic = diagnostic
+        self.http_error = dict(http_error) if http_error is not None else None
 
 
 def _schema_location(error, schema):
@@ -80,8 +83,15 @@ def post_json(url: str, headers: Mapping[str, str], body: Dict[str, Any], timeou
                 raise ModelError("Model response exceeds 2 MB")
             payload = json.loads(data)
     except HTTPError as exc:
-        # Do not include the response body: gateways can echo input or credentials.
-        raise ModelError(f"Model HTTP status {exc.code}") from None
+        try:
+            detail = http_diagnostic(exc)
+        finally:
+            try:
+                exc.close()
+            except (OSError, HTTPException):
+                pass
+        reason = detail.get("provider_code") or detail.get("provider_type") or detail["category"]
+        raise ModelError(f"Model HTTP status {exc.code} ({reason})", http_error=detail) from None
     except (URLError, TimeoutError, OSError):
         raise ModelError("Model transport failed or timed out") from None
     except (UnicodeError, ValueError):
@@ -325,6 +335,8 @@ class RuntimeDecider:
             record["ok"] = True
             return result
         except Exception as exc:
+            if isinstance(exc, ModelError) and exc.http_error is not None:
+                record["http_error"] = dict(exc.http_error)
             diagnostic = exc if isinstance(exc, ToolDiagnostic) else getattr(exc, "diagnostic", None)
             if isinstance(diagnostic, ToolDiagnostic):
                 record["diagnostic"] = diagnostic.as_dict()

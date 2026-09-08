@@ -1,11 +1,12 @@
 # 当前能力与验证状态
 
-更新：2026-09-07。分支：`feat/roadmap-showcase-v1`。本页汇总第五阶段及后续底盘维护状态；早期缺陷复现保留在[历史审计基线](AUDIT_BASELINE_V2.md)，不作为当前缺陷清单。
+更新：2026-09-08。分支：`feat/roadmap-showcase-v1`。本页汇总第五阶段及后续底盘维护状态；早期缺陷复现保留在[历史审计基线](AUDIT_BASELINE_V2.md)，不作为当前缺陷清单。
 
 ## 已验证什么
 
 | 能力 | 当前实现与限制 | 证据 |
 |---|---|---|
+| 模型 HTTP 诊断 | 状态类别、固定白名单错误代码、请求 ID 指纹及数字 Retry-After 进入证据；不输出正文、不自动重试 | [T05 维护记录](../changelog/task-05-http-diagnostics.md)、[使用说明](../docs/HTTP_DIAGNOSTICS.md) |
 | 工具失败诊断与装配配方 | 区分并行开关、安全声明、工具/参数、批次/预算错误；不回显参数值和未知名称；Skill 配方经可运行示例验证 | [T02–T04 维护记录](../changelog/tasks-02-04.md) |
 | 生产格式证据（显式开启） | 关联源码/装配、ReAct 实际配置、批次在途峰值和当前尝试验收回执；基础 v1 兼容；不认证报告真实性或普遍生产可用性 | [使用说明](../docs/PRODUCTION_EVIDENCE.md)、[实现与验证](../changelog/task-04-production-evidence.md) |
 | ReAct 装配一致性检查 | `react_pattern` 统一入口 + 装配期核对模型侧与执行器三项上限；冲突在模型请求前报错，无并行声明工具时提示；检查位于适配层，核心包不依赖适配器 | [原实现与验证](../changelog/react-assembly-alignment-2026-09-07.md)；[后续 T02–T04 完整回归及 Python 3.9 / 3.13 CI 通过](../changelog/tasks-02-04.md) |
