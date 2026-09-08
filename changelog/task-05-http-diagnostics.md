@@ -20,7 +20,15 @@
 - 最终完整回归 **350 passed**（Python 3.12，包含可选 MCP 和编译器用例）。命令：`uv run --offline --no-project --with 'mcp>=2.1,<3' --with pytest --with jsonschema pytest tests/ -q`。
 - `git diff --check` 通过。相较 T01–T04 的 320 项回归新增 30 项，全部通过。
 
-代码提交与远端 CI 链接在提交后的记录中补录。本地结果不代表企业实机或真实模型验证。
+受测代码：[15b689ac825ca5b9708415d654d1792b8cde7f13](https://github.com/TIMPICKLE/devops-agent-chassis/commit/15b689ac825ca5b9708415d654d1792b8cde7f13)。
+
+| CI | 结果 |
+|---|---|
+| [Roadmap 合同与证据](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34174349224) | 通过：Python 3.9 / 3.13 合同回归、双载荷 × 三流程及离线证据核验 |
+| [Employee Project](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34174349243) | 通过：员工项目生成与运行验证回归 |
+| [Employee Update](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34174349285) | 通过：保留定制与行为更新回归 |
+
+付费 live 任务按配置跳过；后续纯文档提交仅补录本表，不扩大受测代码的验证范围。以上结果不代表企业实机或真实模型验证。
 
 ## 范围
 
