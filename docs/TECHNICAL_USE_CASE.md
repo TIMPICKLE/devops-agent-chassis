@@ -94,6 +94,16 @@ def make_flow(prepare, classify, config, decider, toolbox, compile_check):
 
 ReAct 已增加[独立工具并行调用](PARALLEL_TOOLS.md)：装配代码声明 `parallel_safe=True` 并开启并发上限后，一轮可执行多个独立动作，收齐观察再决策。默认单调用；上下文工具、共享候选写入及有依赖动作仍须单独调用。这项能力不扩大其他推理模式的验证范围。
 
+以生成员工的 scheduler 任务为例，模型可以在同一响应里提出两个 `read_file`，分别读取 `include/core/api.hpp` 和 `include/legacy/api.hpp`。底盘先预检整批，再并行读取；收齐观察后，模型在下一轮选择正确声明，通过单独的 `submit_source` 提交候选。`read_files(paths)` 则是一次工具调用，其内部读取不是多线程批次。生成阶段只有共享提交工具 `submit_project`，调高并发不会让生成过程自动并行。
+
+| 参数 | 默认值 | 演示时如何解释 |
+|---|---:|---|
+| `--max-parallel-tools` | 1 | 同时执行的工具数；4 是可调示例值，不是硬编码最大值 |
+| `--max-batch-calls` | 8 | 一轮最多提交的动作数；超过并发数的动作排队 |
+| `--max-tool-calls` | 64 | 同一运行上下文的 ReAct 动作总预算，跨失败尝试保留；启动前整批预留 |
+
+模型请求预算由 `--max-calls` 另行控制，一次响应包含多个工具动作仍只计一次模型请求。CLI 参数、工具声明和实际并发是三个不同层次；如何现场观察见[并行演示](#parallel-demo)。
+
 源码：[节点与编排](../src/agent_chassis/orchestration/__init__.py) · [推理模式与 PlanNode](../src/agent_chassis/orchestration/reasoning.py)。
 
 ## 4. 知识应该在哪一步注入，底盘怎么知道？
@@ -110,6 +120,8 @@ ReAct 已增加[独立工具并行调用](PARALLEL_TOOLS.md)：装配代码声�
 | 上次尝试的失败原因 | `ON_RETRY` | Chassis 的重试策略允许重新尝试时触发；可由 `RetryFeedback` 提供 |
 | 验收阶段需要的结构化参考数据 | `BEFORE_VERDICT` | 最终判据运行前收集；判据仍须自行读取并执行客观检查 |
 | 所有任务共享的启动知识 | `AGENT_BOOT` | 当前默认留空，避免在启动层绑定具体业务规范 |
+
+并行批次走 `_invoke_batch()`：协调线程先按请求顺序完成各动作的知识注入，再提交工作线程。工作线程不接收共享 `task/ctx`；不能把单调用工具显式读取上下文的写法直接当作并行工具配方。
 
 注意：把“必须编译通过”写进一段知识文本，不会自动产生编译检查。它必须同时落实成验收器的执行逻辑。
 
@@ -208,6 +220,18 @@ flowchart TD
 `verify_employee_project.py` 则重放本例的编译及差异验收，两者不能互相替代。
 完整字段和接线见[并行与工具诊断](PARALLEL_TOOLS.md)、[生产格式证据](PRODUCTION_EVIDENCE.md)、[HTTP 诊断](HTTP_DIAGNOSTICS.md)。
 
+### 现场遇到失败，怎样读报告？
+
+下面是**合成情形的字段示意**，不是新增实机结果。字段从单次运行对象读取，例如 `runtime.evidence.json` 的 `runs[0]`；装配期失败可能尚未产生运行证据。
+
+| 看到的结果 | 能得出的结论 | 下一步检查 |
+|---|---|---|
+| `diagnostics` 或 `model_calls[].diagnostic` 出现 `TOOL_NOT_PARALLEL_SAFE`，`action_index=2` | 第 2 个动作不符合批量调用约定，该批次预检失败，零工具执行；已发出的模型请求仍计入预算 | 根据工具的实际读写和依赖关系拆分动作，不能为了过检随意标记并行安全 |
+| `execution.batches` 某批 `requested=2`、`started=2`、`succeeded=1`、`failed=1` | 两个动作已启动，其中一个失败；另一个可能已完成，不能认为整批已回滚 | 按 `batch_id`、`call_id` 查 `tool_calls`，确认结果和副作用后再决定重试 |
+| `model_calls[].http_error` 为 `status=429`、`category=rate_limit` | 服务端返回 HTTP 429；若没有明确的白名单代码，仅凭状态不能区分限流与配额不足 | 核对服务端状态及可用的安全诊断字段；未知 usage 保持 null |
+
+批次执行失败后，底盘等待已提交动作结束、完整记录结果，再进入已装配的失败策略。HTTP 诊断只补充信息，不新增自动重试；已有任务级重试策略独立生效。工具返回“候选不合格”是另一种情况：ReAct 可以在本次尝试剩余预算内继续修正，见第 5 节。
+
 相关回归入口：[上下文实际传递](../tests/test_context_delivery.py)、[模型请求适配](../tests/test_model_runtime.py)、[客观停止仍保留最终验收](../tests/test_objective_stop.py)、[实验报告核验](../tests/test_context_experiment.py)。
 
 ### 四条验证路径，分别证明什么
@@ -232,16 +256,108 @@ flowchart TD
 
 ## 7. 评委可直接复现的入口
 
-在仓库根目录运行，C++ 场景需要系统有 `c++` 编译器。以下命令使用新输出目录：
-
-建议评委优先复现[第四阶段生成项目](GENERATED_EMPLOYEE_PROJECT.md)和[第五阶段更新项目](EMPLOYEE_PROJECT_UPDATES.md)，它们对应当前产品承诺。下面保留早期 Showcase 的底层机制复现入口，不等同于新项目生成链路。
+在仓库根目录运行，C++ 场景需要系统有 `c++` 编译器。先安装依赖：
 
 ```bash
 python -m pip install -e ".[dev,llm]"
+```
 
-# 不调用模型：复现统一装配、单调用/并行和严格证据检查
+下面各段按顺序执行；单条命令退出码非零时，先查看失败记录。所有输出目录应为新目录，重复演示请整体更换目录前缀。生成与任务运行会调用真实模型，需要在环境中配置 `BIGMODEL_API_KEY`；不要把 Key 写进文档或命令记录。预览、应用更新和独立核验不调用模型。
+
+### 7.1 主线：生成一次，运行两个任务，再独立验收
+
+```bash
+# 生成时尚未提供后面的源码目录
+python tools/assemble_employee.py --request-dir employee_requests/build_repair --output-dir reports/review-employee/project --max-calls 3 --max-tokens 16384 --timeout 240
+
+# 两次运行复用同一项目；独立读取可并行，候选提交仍单独执行
+python tools/run_generated_employee.py --project reports/review-employee/project --repo tests/employee_projects/pricing --unit src/main.cpp --output-dir reports/review-employee/pricing --max-calls 6 --max-tokens 4096 --timeout 120 --max-parallel-tools 4 --max-batch-calls 8 --max-tool-calls 64
+python tools/run_generated_employee.py --project reports/review-employee/project --repo tests/employee_projects/scheduler --unit app/worker.cpp --output-dir reports/review-employee/scheduler --max-calls 6 --max-tokens 4096 --timeout 120 --max-parallel-tools 4 --max-batch-calls 8 --max-tool-calls 64
+
+# 重放检查，不再次请求模型
+python tools/verify_employee_project.py --project reports/review-employee/project --report reports/review-employee/pricing --report reports/review-employee/scheduler --require-live --summary-dir reports/review-employee
+```
+
+| 停下来展示什么 | 文件 | 成功条件与含义 |
+|---|---|---|
+| 员工如何工作 | `project/employee.py`、`project/assembly.json` | 生成命令成功；清单包含符合合同的 3–8 个线性节点 |
+| 第一个任务交付什么 | `pricing/candidate.patch`、`pricing/acceptance.json` | `accepted=true`、`compiler_exit=0`；检查器确认原始失败及修改范围 |
+| 是否复用了同一员工 | 两个任务的 `runtime.manifest.json` | `runtime.project_id` 相同；源码输入不同 |
+| 两个任务是否都过关 | 根目录 `summary.json`、`summary.md` | `runtime_verified=true`、`distinct_inputs=2`；各任务验收通过 |
+| 本次是否并行 | 各任务 `runtime.evidence.json` | 见下方批次检查；模型选择单调用也可能完成任务 |
+
+表中路径均相对 `reports/review-employee/`。运行命令已核验原始目录未变；归档重放使用保存的快照，不重新检查已不存在的原始目录。成功条件针对本例的编译与修改范围，不等同于完整项目构建。
+
+<a id="parallel-demo"></a>
+
+### 7.2 并行：先稳定演示机制，再观察真实模型选择
+
+```bash
 python examples/07_verified_assembly.py
+```
 
+这个离线入口使用测试 decider 和同步屏障，输出应包含：
+
+```text
+PASS: configured=1, observed_parallel=False, independent verdict=succeeded
+PASS: configured=2, observed_parallel=True, independent verdict=succeeded
+Test decider only; production-format evidence is not live model validation.
+```
+
+它验证统一装配、实际工具重叠执行、独立判据和严格格式核验。示例只在内存中核验并打印结果，不创建报告目录。随后查看 7.1 中真实员工的保存报告：
+
+```python
+import json
+from pathlib import Path
+
+report = Path("reports/review-employee/scheduler/runtime.evidence.json")
+run = json.loads(report.read_text(encoding="utf-8"))["runs"][0]
+execution = run["execution"]
+print("实际配置：", [item["limits"] for item in execution["runs"]])
+print("发生过工具并发：", execution["parallel_observed"])
+for batch in execution["batches"]:
+    print({key: batch[key] for key in (
+        "batch_id", "requested", "started", "succeeded", "failed", "peak_in_flight"
+    )})
+```
+
+`peak_in_flight > 1` 证明底盘观察到多个工具调用同时执行；不证明 Connector 内部也并行，更不代表某个加速比。批次为空或 `parallel_observed=false` 时，应如实展示；模型可能只用了单调用或一次 `read_files`。这些普通员工报告含自动遥测，但没有自动接入 example 07 的严格来源绑定与检查回执。
+
+### 7.3 维护：保留定制，更新知识，再验新旧任务
+
+这一段使用单独目录和明确的账单 v1/v2 规范，以便证明行为随知识改变。它会新生成一个基线员工，不修改 7.1 的项目；具体材料与命令对应[更新工作流](../.github/workflows/employee-update.yml)。
+
+```bash
+python tools/employee_update_demo.py prepare-requests --output-dir reports/review-update
+python tools/assemble_employee.py --request-dir reports/review-update/requests/v1 --output-dir reports/review-update/base --max-calls 3 --max-tokens 16384 --timeout 240
+python tools/employee_update_demo.py prepare-working --output-dir reports/review-update
+
+# 先预览 plan.md / plan.json；现场确认影响清单后再执行下一条应用命令
+python tools/update_employee.py --project reports/review-update/base --working-copy reports/review-update/working --request-dir reports/review-update/requests/v2 --plan reports/review-update/plan.json --require-live
+python tools/update_employee.py --project reports/review-update/base --working-copy reports/review-update/working --request-dir reports/review-update/requests/v2 --plan reports/review-update/plan.json --apply --output-dir reports/review-update/updated --require-live
+
+# 同一账单输入比较新旧规范，再用新员工重跑两个旧任务
+python tools/run_generated_employee.py --project reports/review-update/base --repo tests/employee_projects/billing --unit app/billing.cpp --output-dir reports/review-update/old-billing --max-calls 6 --max-tokens 4096 --timeout 120
+python tools/run_generated_employee.py --project reports/review-update/updated --repo tests/employee_projects/billing --unit app/billing.cpp --output-dir reports/review-update/new-billing --max-calls 6 --max-tokens 4096 --timeout 120
+python tools/run_generated_employee.py --project reports/review-update/updated --repo tests/employee_projects/pricing --unit src/main.cpp --output-dir reports/review-update/regression-pricing --max-calls 6 --max-tokens 4096 --timeout 120
+python tools/run_generated_employee.py --project reports/review-update/updated --repo tests/employee_projects/scheduler --unit app/worker.cpp --output-dir reports/review-update/regression-scheduler --max-calls 6 --max-tokens 4096 --timeout 120
+python tools/employee_update_demo.py verify --output-dir reports/review-update
+```
+
+| 停下来展示什么 | 相对 `reports/review-update/` 的产物 | 成功条件与含义 |
+|---|---|---|
+| 规范变化会影响哪里 | `plan.md`、`plan.json` | 查看知识变化、受影响节点、保留的人工修改和冲突；存在冲突时不应用 |
+| 人工定制是否保留 | `working/` 与 `updated/` 的 `employee.py`、`TEAM_RUNBOOK.md`；`updated/revision.json` | 新版本保留工作副本中的代码和说明，记录基线来源 |
+| 同一任务是否遵循新规范 | `old-billing/candidate.patch`、`new-billing/candidate.patch` | 旧版引用 v1，新版引用 v2；外部业务检查器验证实际选择 |
+| 更新是否完成且旧任务仍通过 | `summary.json`、`summary.md` | `accepted=true`、`behavior_changed_on_same_input=true`、`old_tasks_passed=2`、`update_model_calls=0` |
+
+`update_model_calls=0` 只指更新操作；基线生成及四次任务运行仍请求模型。两种账单头文件都能编译，所以版本选择必须由专门的业务检查验证。用法和限制见[生成/运行说明](GENERATED_EMPLOYEE_PROJECT.md)、[更新说明](EMPLOYEE_PROJECT_UPDATES.md)。
+
+### 7.4 可选：早期 Showcase 与上下文实验
+
+以下入口用于解释底层机制，不等同于上述生成项目链路。
+
+```bash
 # 不调用模型：检查装配、工具、判据和报告链路
 python tools/run_roadmap_showcase.py --mode offline --flow state_machine --output-dir reports/roadmap-showcase-review
 python tools/verify_roadmap_evidence.py reports/roadmap-showcase-review
