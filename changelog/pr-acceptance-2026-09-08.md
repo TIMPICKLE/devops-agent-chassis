@@ -27,4 +27,11 @@
 - 修复前的完整依赖分支验证为 404 项通过；本次没有修改示例执行路径。
 - 此前暴露问题的 PR 检查为 [`Digital Employee Acceptance` #34244330791](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34244330791)。
 
-修复提交对应的 PR Actions 结果待远端完成后补录。
+受测修复提交：[`d54e71dfe4570f75c63c1a6ee9585ead7a676ed8`](https://github.com/TIMPICKLE/devops-agent-chassis/commit/d54e71dfe4570f75c63c1a6ee9585ead7a676ed8)。对应 PR Actions 全部通过：
+
+- [`Digital Employee Acceptance` #34245346701](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34245346701)：Python 3.9 基础环境 127 项通过、18 项按可选依赖跳过；MCP 最低运行环境与分层验收报告同时通过。
+- [`Roadmap Showcase` #34245346715](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34245346715)：Python 3.13 为 404 项通过，Python 3.9 为 402 项通过、1 项跳过。
+- [`Employee Project` #34245346767](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34245346767) 通过。
+- [`Employee Update` #34245346703](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34245346703) 通过。
+
+本轮未触发付费模型任务或企业网关验证。
