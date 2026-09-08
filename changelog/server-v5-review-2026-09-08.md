@@ -32,4 +32,13 @@
 - `git diff --check` 通过。
 
 所有新增测试使用合成数据，不调用企业服务或付费模型。历史服务器成功结果不作为本次修复后的 live 验证。
-远端 CI 随修复提交触发，结果另行补录。
+
+## 远端验证
+
+修复受测提交：[07bd784a3e416b188617ca29377a1276a5cb9165](https://github.com/TIMPICKLE/devops-agent-chassis/commit/07bd784a3e416b188617ca29377a1276a5cb9165)。三条 CI 均通过：
+
+- [Roadmap 合同与可移植证据](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34196199644)，包含 Python 3.9 / 3.13。
+- [Employee Project](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34196199588)。
+- [Employee Update](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34196199574)。
+
+后续提交仅补录验证链接；未触发付费 live 任务，不扩大此次修复的验证范围。
