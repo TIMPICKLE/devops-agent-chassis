@@ -56,12 +56,12 @@
 | 交付 | 验证依据 | 当前范围 |
 |---|---|---|
 | 底盘五系统与判据合同 | [当前验收](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34245972616) | 基线 `68264ed`，含兼容性与 MCP 传输测试 |
-| 一次生成、两次运行 | [真实链路](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34020348896) | 同一生成员工处理两个公开 C++ 项目 |
-| 知识更新保留人工修改 | [真实链路](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/34033606604) | 更新本身 0 次模型调用，行为对照与回归任务通过 |
+| 业务需求驱动的生成与装配 | [装配 Skill](https://github.com/TIMPICKLE/devops-agent-chassis/blob/68264ed39ae984c1fbbc17662892f2d0aeb58ab1/.claude/skills/assemble-digital-employee/SKILL.md) | 逐组访谈、选择编排和推理、生成载荷与装配脚本、接入真实服务并验证 |
+| 实际装配交付 | [Azure 装配脚本](https://github.com/TIMPICKLE/AzureCodeAgent_Base_Agent_chassis/blob/eabbb4c999cfe86e47b8233959bf7927e68e7189/generated/azure_code.py) | Work Item 任务源、业务工具、完成判据与底盘五系统接线 |
 | Azure 装配与业务合同 | [装配源码](https://github.com/TIMPICKLE/AzureCodeAgent_Base_Agent_chassis/blob/eabbb4c999cfe86e47b8233959bf7927e68e7189/generated/azure_code.py)、[合同测试](https://github.com/TIMPICKLE/AzureCodeAgent_Base_Agent_chassis/blob/eabbb4c999cfe86e47b8233959bf7927e68e7189/tests/test_chassis_payload.py) | 真实底盘、测试替身验证业务接线，不等同于线上成功率 |
 | Azure 队列与恢复 | [队列参考](https://github.com/TIMPICKLE/AzureCodeAgent_Base_Agent_chassis/blob/eabbb4c999cfe86e47b8233959bf7927e68e7189/docs/reference/task-queue.md)及相关测试 | 单数据库单服务进程，线程并发与同工作项串行 |
 
-源码版本和核验日期集中在 [证据索引](g-证据索引.md)。历史 live 作业已核对到具体成功步骤，不仅依据工作流名称。Actions 产物有保留期，比赛前应保存需要的归档。
+源码版本和核验日期集中在 [证据索引](g-证据索引.md)。通用装配流程、业务实测和底盘回归分别提供对应证据。Actions 产物有保留期，比赛前应保存需要的归档。
 
 ## 第三部分：场景拓展与产品路线
 
@@ -73,7 +73,7 @@
 
 | 阶段 | 交付范围 | 进入下一阶段的证据 |
 |---|---|---|
-| 当前基础 | Sonar 业务实践、Azure 底盘应用、C++ 生成与知识更新参考链路 | 已有代码、维护者实测反馈及历史 Actions |
+| 当前基础 | Sonar 业务实践、通用需求访谈与装配流程、Azure 底盘应用 | 已有代码、维护者实测反馈及历史 Actions |
 | 近期试点 | 固化两类岗位包，补 Azure 项目测试要求、模型用量与运行版本核对 | 第二团队完成部署；取得接入人时、任务采纳与异常处置记录 |
 | 规模复制 | 岗位模板清单、批次装配入口、统一配置校验与验收报告 | 多个独立输入包可分别生成、验收、回退，失败不会混淆其他员工 |
 | 持续维护 | 扩大知识更新能力，处理有明确规则的工具和流程变化 | 冲突可解释，人工修改保留，旧任务回归通过 |
@@ -92,7 +92,7 @@
 
 ### 4. “批量生成”应交付的最小岗位包
 
-每个岗位包包含任务输入合同、岗位说明、版本化知识、工具白名单、验收器、异常处理和运行说明。已有核心及工厂能力可作为起点，统一的岗位包格式与批次生成/管理入口仍是后续产品工作。
+每个岗位包包含任务输入合同、岗位说明、版本化知识、工具白名单、验收器、异常处理和运行说明。已有底盘与需求访谈装配能力可作为起点，统一的岗位包格式与批次生成/管理入口仍是后续产品工作。
 
 不能仅把同一段 Prompt 复制十份就算十个岗位。复用价值应通过第二个岗位的实际接入与维护成本体现。
 
@@ -101,7 +101,7 @@
 - **一条真实业务链路**：展示 Azure 原始需求、PR 和检查结果，评委能看懂用户如何获益。
 - **一组已有规模数据**：SonarQube 展示覆盖范围和历史处理结果，保留日期与口径。
 - **一次复用**：同一底盘接入真实 Azure 业务，明确哪些代码仍由业务负责。
-- **一次维护**：用已有知识更新案例展示人工定制保留，以及新旧规则改变行为。
+- **一套维护方法**：从实际岗位规范说明知识如何注入、规则变化后哪些步骤需要重验；有对应业务记录时展示具体更新结果。
 - **一次失败处置**：展示未通过验收不交付，或中断任务等待人工核对。正常交付与异常处理共同体现工程能力。
 
 演示顺序、时长、备选路径和答辩话术见 [比赛演示与答辩](f-比赛演示与答辩.md)。
