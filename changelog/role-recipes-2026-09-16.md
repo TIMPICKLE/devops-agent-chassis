@@ -25,7 +25,7 @@
 
 可复现验证：安装 `.[dev,llm]` 及离线原应用配置所需 `rich python-dotenv`，运行 `python -m pytest tests/ -q`；实际来源复用用 `tools/verify_role_recipe_examples.py`（参数见[使用说明](../docs/ROLE_RECIPES.md)）。
 
-新增 [Role Recipes 工作流](../.github/workflows/role-recipes.yml)：Python 3.9/3.13 配方合同，以及固定源实现的三实例离线验收。产物含源码实例、配置与测试日志，保留 14 天。具体 Actions 链接在提交后补录。
+新增 [Role Recipes 工作流](../.github/workflows/role-recipes.yml)：Python 3.9/3.13 配方合同，以及固定源实现的三实例离线验收。产物含源码实例、配置与测试日志，保留 14 天。[本轮 Actions 35044157900](https://github.com/TIMPICKLE/devops-agent-chassis/actions/runs/35044157900) 已通过三个作业（Python 3.9、3.13 配方合同与现有岗位实例化）；受测功能提交为 `e3cd17a1e17d0771a74c9bcb782e5efd409f6482`。后续仅补充本证据链接，不扩大验证范围。
 
 ## 限制与下一步
 
