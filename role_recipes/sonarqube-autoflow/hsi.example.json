@@ -1,0 +1,19 @@
+{
+  "name": "hsi-sonar",
+  "recipe": "sonarqube-autoflow",
+  "version": "1.0.0",
+  "settings": {
+    "project_key": "HSI",
+    "model_url": "https://model.example.com/v1",
+    "model": "your-deployment",
+    "azure_project": "HSI",
+    "azure_repository": "hsi-service",
+    "task_id": "123",
+    "git_url": "https://devops.example.com/org/HSI/_git/hsi-service",
+    "pr_url_prefix": "https://devops.example.com/org/HSI/_git/hsi-service/pullrequest/"
+  },
+  "env_refs": {
+    "GLM_API_KEY": "HSI_LLM_KEY",
+    "SONAR_MCP_CONFIG": "HSI_MCP_CONFIG"
+  }
+}

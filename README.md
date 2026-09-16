@@ -4,6 +4,8 @@
 
 **比赛汇报材料：[Final Report](Final%20Report/README.md)**，含更新后的需求、方案、成果报告、8 页 HTML 评审演示与答辩脚本（2026-09-11）。
 
+**岗位配方库：[选择已有岗位，创建项目实例](docs/ROLE_RECIPES.md)**。已收录 Azure CodeAgent / SonarQube 固定版本配方，提供配置预览、独立实例、启动与完整性检查；创建过程不调用模型，执行沿用原岗位实现。
+
 **首次了解项目？[全流程演示：通过工程底盘装配 Azure DevOps CodeAgent](docs/LEADERS_USE_CASE.md)**，以已完成装配的真实项目为例，沿八步交互看清需求如何变成员工项目，以及工作项指令如何变成代码、验证结果与 PR。
 
 **技术评审入口：[需求如何变成节点、知识注入与运行逻辑](docs/TECHNICAL_USE_CASE.md)**，附源码对应关系、当前能力边界和复现命令。

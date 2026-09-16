@@ -1,5 +1,7 @@
 # 变更概览
 
+最新功能：[岗位配方库](role-recipes-2026-09-16.md)。固定版本的 Azure CodeAgent / SonarQube 配方支持发现、配置预览、实例化及独立启动；附源码复用与离线验收，使用见[岗位配方说明](../docs/ROLE_RECIPES.md)。
+
 最新文档：[CodeAgent 实际项目全流程演示](codeagent-leaders-2026-09-14.md)。领导版改用已装配的 Azure DevOps CodeAgent，按“对话装配员工 → 工作项下发任务 → 编码验证 → PR 或本地候选交付”八步展示，附源码与现场演示入口。
 
 开发分支：`feat/roadmap-showcase-v1`。这里按阶段记录**已实现的功能、用途、验证结果与限制**；完整规划仍在 [Roadmap](../roadmap/README.md)。
