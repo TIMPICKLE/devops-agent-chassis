@@ -1,5 +1,7 @@
 # 全流程演示：通过工程底盘，装配一位 Azure DevOps CodeAgent
 
+已有岗位现在可以通过[岗位配方库](ROLE_RECIPES.md)复用到新项目：选择 Azure CodeAgent 或 SonarQube 配方，填写项目配置，创建独立员工实例，再准备运行环境并验收。本页继续说明 CodeAgent 的业务交互；配方库提供可操作的复用入口。
+
 **研发负责人说清工作方式，AI 助手按工程底盘规范装配出 CodeAgent；开发者随后在 Azure DevOps 工作项里 `@common.ois`，由这个员工读需求、规划、改代码、检查并交付 PR。**
 
 本文以已经完成装配的 [AzureCodeAgent_Base_Agent_chassis][codeagent] 为主角，展示两次不同的交付：**装配时交付一个可持续运行的员工项目，使用时交付一项具体工作的代码成果。**

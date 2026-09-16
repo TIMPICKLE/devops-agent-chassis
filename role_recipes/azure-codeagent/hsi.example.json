@@ -1,0 +1,25 @@
+{
+  "name": "hsi-codeagent",
+  "recipe": "azure-codeagent",
+  "version": "1.0.0",
+  "settings": {
+    "organization_url": "https://devops.example.com/org",
+    "project": "HSI",
+    "repository": "hsi-service",
+    "branch": "main",
+    "model_url": "https://model.example.com/v1",
+    "model": "your-deployment",
+    "test_command": [
+      "python",
+      "-m",
+      "pytest",
+      "-q"
+    ],
+    "port": 8081
+  },
+  "env_refs": {
+    "AZURE_DEVOPS_PAT": "HSI_ADO_PAT",
+    "LLM_API_KEY": "HSI_LLM_KEY",
+    "CHASSIS_ROOT": "CHASSIS_ROOT"
+  }
+}

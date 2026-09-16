@@ -1,0 +1,204 @@
+{
+  "schema_version": "role-recipe/v1",
+  "id": "azure-codeagent",
+  "version": "1.0.0",
+  "title": "Azure DevOps 工作项编码员工",
+  "description": "复用已装配的 CodeAgent：工作项评论 → 规划 → Claude Code 编码 → 独立验证 → 按配置交付。",
+  "source": {
+    "repository": "https://github.com/TIMPICKLE/AzureCodeAgent_Base_Agent_chassis",
+    "commit": "a92270a231496bd9ec228d1981025f2933fcafd9",
+    "include": [
+      "*.py",
+      "requirements.txt",
+      "README.md",
+      "LICENSE",
+      "knowledge/*",
+      "claude/*",
+      "localJSON/mcp.example.json"
+    ]
+  },
+  "components": {
+    "task_source": [
+      "payloads/azure_code.py",
+      "webhook_receiver.py"
+    ],
+    "orchestration": [
+      "generated/azure_code.py"
+    ],
+    "tools": [
+      "tools/code_execution_tool.py",
+      "clients/mcp_client.py"
+    ],
+    "done_criteria": [
+      "payloads/azure_code.py",
+      "agents/local_verification.py"
+    ],
+    "knowledge": [
+      "knowledge/code-execution.md"
+    ],
+    "failure": [
+      "clients/services.py",
+      "queue_store.py"
+    ],
+    "observability": [
+      "logging_config.py",
+      "agents/record_keeper.py"
+    ]
+  },
+  "runtime": {
+    "python_min": [
+      3,
+      10
+    ],
+    "entrypoint": "cli.py",
+    "requirements": "requirements.txt",
+    "modules": [
+      "rich",
+      "dotenv",
+      "openai",
+      "mcp",
+      "fastapi",
+      "uvicorn",
+      "httpx"
+    ],
+    "executables": [
+      {
+        "command": "git"
+      },
+      {
+        "command": "npx"
+      },
+      {
+        "command": "claude",
+        "env": "CLAUDE_CODE_CLI"
+      }
+    ],
+    "copy_files": {
+      "localJSON/mcp.json": "localJSON/mcp.example.json"
+    },
+    "instance_paths": {
+      "GIT_WORKSPACE_ROOT": "workspace",
+      "COMMENT_TASK_DB_PATH": "localJSON/tasks.db",
+      "MCP_CONFIG_PATH": "localJSON/mcp.json"
+    },
+    "usage": [
+      "python launch.py run serve",
+      "python launch.py run run /absolute/event.json"
+    ],
+    "acceptance": "CHASSIS_ROOT 与 PYTHONPATH 指向实际底盘后，运行 application/tests/test_chassis_payload.py；生产任务另按其业务验收。"
+  },
+  "settings": {
+    "organization_url": {
+      "env": "AZURE_DEVOPS_ORG_URL",
+      "type": "url",
+      "required": true
+    },
+    "project": {
+      "env": "COMMENT_TARGET_PROJECT",
+      "type": "text",
+      "required": true
+    },
+    "repository": {
+      "env": "COMMENT_TARGET_REPOSITORY",
+      "type": "text",
+      "required": true
+    },
+    "branch": {
+      "env": "COMMENT_TARGET_BRANCH",
+      "type": "text",
+      "required": false,
+      "default": "main"
+    },
+    "model_url": {
+      "env": "LLM_API_BASE",
+      "type": "url",
+      "required": true
+    },
+    "model": {
+      "env": "LLM_MODEL",
+      "type": "text",
+      "required": true
+    },
+    "test_command": {
+      "env": "PROJECT_TEST_COMMAND",
+      "type": "argv",
+      "required": true
+    },
+    "delivery_enabled": {
+      "env": "COMMENT_DELIVERY_ENABLED",
+      "type": "boolean",
+      "required": false,
+      "default": false
+    },
+    "notifications_enabled": {
+      "env": "COMMENT_NOTIFICATIONS_ENABLED",
+      "type": "boolean",
+      "required": false,
+      "default": false
+    },
+    "host": {
+      "env": "COMMENT_WEBHOOK_HOST",
+      "type": "text",
+      "required": false,
+      "default": "127.0.0.1"
+    },
+    "port": {
+      "env": "COMMENT_WEBHOOK_PORT",
+      "type": "integer",
+      "required": false,
+      "default": 8080,
+      "min": 1,
+      "max": 65535
+    },
+    "coding_cli": {
+      "env": "CLAUDE_CODE_CLI",
+      "type": "text",
+      "required": false,
+      "default": "claude"
+    },
+    "max_plan_steps": {
+      "env": "WORKFLOW_MAX_PLAN_STEPS",
+      "type": "integer",
+      "required": false,
+      "default": 5,
+      "min": 1,
+      "max": 100
+    },
+    "max_replans": {
+      "env": "WORKFLOW_MAX_REPLANS",
+      "type": "integer",
+      "required": false,
+      "default": 2,
+      "min": 1,
+      "max": 100
+    }
+  },
+  "env_refs": {
+    "AZURE_DEVOPS_PAT": {
+      "kind": "secret",
+      "required": true,
+      "description": "Azure DevOps PAT 的环境变量名"
+    },
+    "LLM_API_KEY": {
+      "kind": "secret",
+      "required": true,
+      "description": "模型服务凭据的环境变量名"
+    },
+    "CHASSIS_ROOT": {
+      "kind": "directory",
+      "required": true,
+      "contains": "src/agent_chassis/contracts.py",
+      "description": "兼容底盘检出路径的环境变量名；源码声明基线 68264ed，配方 CI 另测当前底盘"
+    },
+    "COMMENT_WEBHOOK_TOKEN": {
+      "kind": "secret",
+      "required": false,
+      "description": "Webhook token 引用（可选）"
+    }
+  },
+  "limitations": [
+    "触发账号沿用源实现 common.ois。",
+    "check 只验证实例完整性或环境，不连接 Azure/模型/Claude Code。",
+    "外部交付和通知由实例配置显式启用。"
+  ]
+}

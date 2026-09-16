@@ -1,0 +1,64 @@
+name: Role Recipes · Versioned Employee Instantiation
+
+on:
+  pull_request:
+  push:
+    branches: [main, "feat/roadmap-**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recipe-contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install -e ".[dev]"
+      - name: Validate recipes, instance isolation and standalone launch
+        run: python -m pytest tests/test_role_recipes.py -q
+
+  existing-employee-reuse:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: TIMPICKLE/AzureCodeAgent_Base_Agent_chassis
+          ref: a92270a231496bd9ec228d1981025f2933fcafd9
+          path: recipe-sources/azure
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: TIMPICKLE/SonarqubeAutoFlow_MAF
+          ref: 02f83a17527f2db4256a5908f5d816b9715487c3
+          path: recipe-sources/sonar
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e ".[dev]" rich python-dotenv
+      - name: Instantiate two Azure projects and one Sonar project; verify offline
+        run: >-
+          python tools/verify_role_recipe_examples.py
+          --azure-source recipe-sources/azure --sonar-source recipe-sources/sonar
+          --output-dir reports/role-recipes
+      - name: Upload instance and offline acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: role-recipes-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/role-recipes/
+          retention-days: 14

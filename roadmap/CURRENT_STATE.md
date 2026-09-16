@@ -1,6 +1,6 @@
 # 当前能力与验证状态
 
-更新：2026-09-08。分支：`feat/roadmap-showcase-v1`。本页汇总第五阶段及后续底盘维护状态；早期缺陷复现保留在[历史审计基线](AUDIT_BASELINE_V2.md)，不作为当前缺陷清单。
+更新：2026-09-16。本轮分支：`feat/roadmap-role-recipes`。本页汇总第五阶段、后续底盘维护及岗位配方状态；早期缺陷复现保留在[历史审计基线](AUDIT_BASELINE_V2.md)，不作为当前缺陷清单。
 
 最新实测复核：[V5 归属与修复](../changelog/server-v5-review-2026-09-08.md)。无安全工具的装配告警现明确说明单调用仍允许、批次整批拒绝，不暗示自动降级；[模型接入说明](../docs/MODEL_COMPATIBILITY.md)补充流式能力限制、超时排查及业务验收边界。
 
@@ -8,6 +8,7 @@
 
 | 能力 | 当前实现与限制 | 证据 |
 |---|---|---|
+| 岗位配方与现有员工实例化 | Azure CodeAgent / SonarQube 固定源码配方；配置预览、独立实例和启动入口、摘要检查；不调用模型、不替换原业务运行时 | [使用说明](../docs/ROLE_RECIPES.md)、[实施记录](../changelog/role-recipes-2026-09-16.md)：本地 418 passed / 1 skipped；Azure 两实例各 9 项离线载荷测试；Sonar 配置/知识/源码验证；无新增企业 live |
 | 模型流式接收 | OpenAI Chat Completions / Anthropic Messages SSE，显式开启，完整重组后预检；不提前执行工具、不自动降级 | [流式用法](../docs/STREAMING.md)、[实现与验证](../changelog/streaming-2026-09-08.md)；未验证企业网关 |
 | 模型 HTTP 诊断 | 状态类别、固定白名单错误代码、请求 ID 指纹及数字 Retry-After 进入证据；不输出正文、不自动重试 | [T05 维护记录](../changelog/task-05-http-diagnostics.md)、[使用说明](../docs/HTTP_DIAGNOSTICS.md) |
 | 工具失败诊断与装配配方 | 区分并行开关、安全声明、工具/参数、批次/预算错误；不回显参数值和未知名称；Skill 配方经可运行示例验证 | [T02–T04 维护记录](../changelog/tasks-02-04.md) |
@@ -47,6 +48,6 @@ T4 另提供报告完整性/内部一致性的严格格式检查，需显式来�
 
 ## 下一步与阅读入口
 
-优先接入实际项目的构建配置/命令和业务验收材料，然后测量接入与维护收益。见 [Roadmap v3](README.md)、[Backlog](BACKLOG.md)、[变更概览](../changelog/README.md)。
+用户已选择并交付岗位配方首版。接下来可在既有岗位配方上接入实际构建/业务验收、批量实例化与安装交付，再测量接入与维护收益；后续功能按选择推进。见 [Roadmap v3](README.md)、[Backlog](BACKLOG.md)、[变更概览](../changelog/README.md)。
 
 领导阅读：[两分钟案例](../docs/LEADERS_USE_CASE.md)。技术评委阅读：[节点、知识与验证](../docs/TECHNICAL_USE_CASE.md)。

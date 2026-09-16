@@ -1,0 +1,178 @@
+{
+  "schema_version": "role-recipe/v1",
+  "id": "sonarqube-autoflow",
+  "version": "1.0.0",
+  "title": "SonarQube 代码异味治理员工",
+  "description": "将既有 SonarQube 治理应用按项目实例化，沿用源应用的 MAF 执行流程与交付行为。",
+  "source": {
+    "repository": "https://github.com/TIMPICKLE/SonarqubeAutoFlow_MAF",
+    "commit": "02f83a17527f2db4256a5908f5d816b9715487c3",
+    "include": [
+      "*.py",
+      "requirements.txt",
+      "README.md",
+      "LICENSE",
+      "localJSON/mcp.example.json",
+      ".claude/skills/*.md"
+    ]
+  },
+  "components": {
+    "task_source": [
+      "orchestrator.py"
+    ],
+    "orchestration": [
+      "orchestrator.py",
+      "agents/smell_fix_agent.py"
+    ],
+    "tools": [
+      "tools/fix_tools.py",
+      "tools/code_tools.py",
+      "tools/analysis_tools.py"
+    ],
+    "done_criteria": [
+      "orchestrator.py",
+      "tools/analysis_tools.py"
+    ],
+    "knowledge": [
+      ".claude/skills/abp-net-backend.md",
+      ".claude/skills/angular-frontend.md",
+      ".claude/skills/typescript-common.md"
+    ],
+    "failure": [
+      "orchestrator.py"
+    ],
+    "observability": [
+      "config.py",
+      "orchestrator.py"
+    ]
+  },
+  "runtime": {
+    "python_min": [
+      3,
+      10
+    ],
+    "entrypoint": "cli.py",
+    "requirements": "requirements.txt",
+    "modules": [
+      "agent_framework",
+      "openai",
+      "requests",
+      "pydantic",
+      "git",
+      "dotenv",
+      "rich",
+      "lark_oapi",
+      "mcp"
+    ],
+    "executables": [
+      {
+        "command": "git"
+      },
+      {
+        "command": "npx"
+      },
+      {
+        "command": "claude"
+      }
+    ],
+    "external_files": {
+      "localJSON/mcp.json": "SONAR_MCP_CONFIG"
+    },
+    "usage": [
+      "python launch.py run status",
+      "python launch.py run run"
+    ],
+    "acceptance": "沿用源应用的扫描、工作区变更与交付结果；业务验证必须在目标环境另行执行。",
+    "instance_paths": {
+      "GIT_REPO_NAME": "workspace"
+    }
+  },
+  "settings": {
+    "project_key": {
+      "env": "SONARQUBE_PROJECT_KEY",
+      "type": "text",
+      "required": true
+    },
+    "branch": {
+      "env": "SONARQUBE_BRANCH",
+      "type": "text",
+      "required": false,
+      "default": "master",
+      "choices": [
+        "master"
+      ]
+    },
+    "model_url": {
+      "env": "GLM_BASE_URL",
+      "type": "url",
+      "required": true
+    },
+    "model": {
+      "env": "GLM_MODEL",
+      "type": "text",
+      "required": true
+    },
+    "azure_project": {
+      "env": "AZURE_DEVOPS_PROJECT",
+      "type": "text",
+      "required": true
+    },
+    "azure_repository": {
+      "env": "AZURE_DEVOPS_REPOSITORY",
+      "type": "text",
+      "required": true
+    },
+    "target_branch": {
+      "env": "AZURE_DEVOPS_TARGET_BRANCH",
+      "type": "text",
+      "required": false,
+      "default": "refs/heads/master",
+      "choices": [
+        "refs/heads/master"
+      ]
+    },
+    "task_id": {
+      "env": "AZURE_DEVOPS_TASK_ID",
+      "type": "text",
+      "required": true
+    },
+    "git_url": {
+      "env": "GIT_REPO_URL",
+      "type": "url",
+      "required": true
+    },
+    "pr_url_prefix": {
+      "env": "PR_PREVIEW_URL_PREFIX",
+      "type": "url",
+      "required": true
+    }
+  },
+  "env_refs": {
+    "GLM_API_KEY": {
+      "kind": "secret",
+      "required": true,
+      "description": "模型 API key 的环境变量名"
+    },
+    "SONAR_MCP_CONFIG": {
+      "kind": "file",
+      "required": true,
+      "description": "已配置 Azure/Sonar MCP 的 JSON 文件路径，运行时临时映射到实例 localJSON/mcp.json"
+    },
+    "FEISHU_APP_ID": {
+      "kind": "secret",
+      "required": false,
+      "description": "沿用源应用飞书接入设置"
+    },
+    "FEISHU_APP_SECRET": {
+      "kind": "secret",
+      "required": false,
+      "description": "沿用源应用飞书凭据设置"
+    }
+  },
+  "limitations": [
+    "源应用运行时依赖 MAF；配方复用其现有实现，不把它重写为核心 SDK。",
+    "run 沿用源应用的提交、推送、PR 和通知行为，先按原项目说明准备业务环境。",
+    "MCP 文件引用在启动时读取，正常退出后删除实例副本；异常断电后需人工清理残留再运行。",
+    "固定源实现按 master 拉取代码，当前配方仅接受 master 扫描/交付分支。"
+  ]
+}
